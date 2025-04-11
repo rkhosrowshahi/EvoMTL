@@ -5,7 +5,7 @@ import numpy as np
 import cvxpy as cp
 
 from LibMTL._record import _PerformanceMeter
-from LibMTL.utils import count_parameters, set_param
+from LibMTL.utils import build_model_from_blocks_using_centers, build_model_from_blocks_using_gaussian, count_parameters, plot_pareto_front_and_population, ubp_cluster
 import LibMTL.weighting as weighting_method
 import LibMTL.architecture as architecture_method
 
@@ -94,6 +94,7 @@ class Trainer(nn.Module):
         self.weighting = weighting
 
         self.bilevel_methods = ['MOML', 'FORUM', 'AutoLambda']
+        self.hybrid_methods = ['EVO']
 
         self._prepare_model(weighting, architecture, encoder_class, decoders)
         self._prepare_optimizer(optim_param, scheduler_param)
@@ -105,7 +106,7 @@ class Trainer(nn.Module):
         
     def _prepare_model(self, weighting, architecture, encoder_class, decoders):
 
-        weighting_class = weighting_method.__dict__['EW' if self.weighting in self.bilevel_methods else weighting] 
+        weighting_class = weighting_method.__dict__['EW' if self.weighting in self.bilevel_methods + self.hybrid_methods else weighting] 
         architecture_class = architecture_method.__dict__[architecture]
         
         class MTLmodel(architecture_class, weighting_class):
@@ -221,6 +222,8 @@ class Trainer(nn.Module):
               val_dataloaders=None, return_weight=False, **kwargs):
         if self.weighting in self.bilevel_methods:
             train_func = self.train_bilevel
+        elif self.weighting in self.hybrid_methods:
+            train_func = self.train_evo_using_centers
         else:
             train_func = self.train_singlelevel
         train_func(train_dataloaders, test_dataloaders, epochs, 
@@ -306,7 +309,7 @@ class Trainer(nn.Module):
             return self.batch_weight
 
 
-    def test(self, test_dataloaders, epoch=None, mode='test', return_improvement=False):
+    def test(self, test_dataloaders, epoch=None, mode='test', return_improvement=False, num_batch=None):
         r'''The test process of multi-task learning.
 
         Args:
@@ -321,14 +324,22 @@ class Trainer(nn.Module):
         self.meter.record_time('begin')
         with torch.no_grad():
             if not self.multi_input:
+                total_loss = torch.zeros(self.task_num).to(self.device)
+                total_batch = 0
                 for batch_index in range(test_batch):
                     test_inputs, test_gts = self._process_data(test_loader)
                     test_preds = self.model(test_inputs)
                     test_preds = self.process_preds(test_preds)
                     test_losses = self._compute_loss(test_preds, test_gts)
                     self.meter.update(test_preds, test_gts)
+                    total_loss += test_losses
+                    total_batch += 1
+                    if num_batch is not None and total_batch >= num_batch:
+                        break
             else:
+                total_loss = torch.zeros(self.task_num).to(self.device)
                 for tn, task in enumerate(self.task_name):
+                    total_batch = 0
                     for batch_index in range(test_batch[tn]):
                         test_input, test_gt = self._process_data(test_loader[task])
                         test_pred = self.model(test_input, task)
@@ -336,6 +347,10 @@ class Trainer(nn.Module):
                         test_pred = self.process_preds(test_pred)
                         test_loss = self._compute_loss(test_pred, test_gt, task)
                         self.meter.update(test_pred, test_gt, task)
+                        total_loss[tn] += test_loss
+                        total_batch += 1
+                        if num_batch is not None and total_batch >= num_batch:
+                            break
         self.meter.record_time('end')
         self.meter.get_score()
         self.meter.display(epoch=epoch, mode=mode)
@@ -343,6 +358,7 @@ class Trainer(nn.Module):
         self.meter.reinit()
         if return_improvement:
             return improvement
+        return total_loss / total_batch
 
 
     ### for bilevel methods
@@ -720,3 +736,404 @@ class Trainer(nn.Module):
         self.optimizer.step()
 
         return lambda_buffer
+
+    def train_evo_using_gaussian(self, train_dataloaders, test_dataloaders, epochs, 
+                  val_dataloaders=None, return_weight=False):
+        r'''The training process of multi-task learning.
+
+        Args:
+            train_dataloaders (dict or torch.utils.data.DataLoader): The dataloaders used for training. \
+                            If ``multi_input`` is ``True``, it is a dictionary of name-dataloader pairs. \
+                            Otherwise, it is a single dataloader which returns data and a dictionary \
+                            of name-label pairs in each iteration.
+
+            test_dataloaders (dict or torch.utils.data.DataLoader): The dataloaders used for the validation or testing. \
+                            The same structure with ``train_dataloaders``.
+            epochs (int): The total training epochs.
+            return_weight (bool): if ``True``, the loss weights will be returned.
+        '''
+        train_loader, train_batch = self._prepare_dataloaders(train_dataloaders)
+        train_batch = max(train_batch) if self.multi_input else train_batch
+        
+        self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
+        self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
+        self.model.epochs = epochs
+        print(list(self.task_dict.keys()))
+
+        from pymoo.algorithms.moo.nsga2 import NSGA2
+        from pymoo.core.evaluator import Evaluator
+        from pymoo.operators.mutation.pm import PolynomialMutation
+        from pymoo.operators.mutation.gauss import GaussianMutation
+        from pymoo.operators.crossover.ux import UniformCrossover
+        from pymoo.operators.crossover.pntx import TwoPointCrossover
+        from pymoo.core.problem import Problem
+        from pymoo.core.termination import NoTermination
+        from pymoo.problems.static import StaticProblem
+        from pymoo.indicators.hv import HV
+        from pymoo.visualization.scatter import Scatter
+
+        hv_indicator = HV(ref_point=np.ones(self.task_num)+0.1)
+
+        NP = self.kwargs['weight_args']['EVO_pop_size']
+        W_init = self.kwargs['weight_args']['EVO_ws']
+        initial_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
+        best_weights = initial_weights
+        total_weights = len(initial_weights)
+        # codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=best_weights.detach().cpu().numpy())
+        # W = len(centers)
+        # D = W * 2
+        # del centers, log_sigmas, assignment
+        algorithm = NSGA2(pop_size=NP, mutation=PolynomialMutation(eta=5))
+        # # D = None
+        # problem = Problem(n_var=D, n_obj=3, n_constr=0, xl=np.ones(D) * -1, xu=np.ones(D))
+        # # let the algorithm object never terminate and let the loop control it
+        termination = NoTermination()
+        # # prepare the algorithm to solve the specific problem (same arguments as for the minimize function)
+        # algorithm.setup(problem, termination=termination, seed=1, verbose=False)
+        for epoch in range(epochs):
+            self.model.epoch = epoch
+            self.meter.record_time('begin')
+            reset = False
+            if epoch % 10 == 0:
+                # self.model = copy.deepcopy(ea_model)
+                torch.nn.utils.vector_to_parameters(best_weights, self.model.parameters())
+                self.model.train()
+                for i, batch_index in enumerate(range(train_batch)):
+                    train_losses = []
+                    for sample_num in range(3 if self.weighting in ['MoDo', 'SDMGrad'] else 1):
+                        if not self.multi_input:
+                            train_inputs, train_gts = self._process_data(train_loader)
+                            # print(f"data shape: {train_inputs.shape}")
+                        else:
+                            train_inputs, train_gts = {}, {}
+                            for tn, task in enumerate(self.task_name):
+                                train_input, train_gt = self._process_data(train_loader[task])
+                                train_inputs[task], train_gts[task] = train_input, train_gt
+                                # print(f"task: {task}, data shape: {train_inputs[task].shape}")
+                        train_losses_, train_preds = self.forward4loss(self.model, train_inputs, train_gts, return_preds=True)
+                        train_losses.append(train_losses_)
+
+                    train_losses = torch.stack(train_losses).squeeze(0)
+                    if not self.multi_input:
+                            self.meter.update(train_preds, train_gts)
+                    else:
+                        for tn, task in enumerate(self.task_name):
+                            self.meter.update(train_preds[task], train_gts[task], task)
+
+                    self.optimizer.zero_grad(set_to_none=False)
+                    w = self.model.backward(train_losses, **self.kwargs['weight_args'])
+                    if w is not None:
+                        self.batch_weight[:, epoch, batch_index] = w
+                    self.optimizer.step()
+
+                    # if i == 0:
+                    #     break
+
+                self.meter.record_time('end')
+                self.meter.get_score()
+                self.model.train_loss_buffer[:, epoch] = self.meter.loss_item
+                self.meter.display(epoch=epoch, mode='train')
+                self.meter.reinit()
+                gd_loss = self.forward4loss(self.model, train_inputs, train_gts)
+                print(f"gd_loss: {gd_loss.detach().cpu().numpy()}")
+                gd_val_loss = self.test(test_dataloaders, epoch, mode='test', num_batch=None)
+
+                best_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
+                codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=best_weights.detach().cpu().numpy())
+                W = len(centers)
+                D = W * 2
+                print(f"W: {W}, D: {D}")
+                x0 = np.concatenate([centers, log_sigmas])
+                init_population = np.zeros((NP, D))
+                init_fitness = np.full(NP, np.inf)
+                for i in range(NP):
+                    for j in range(W):
+                        init_population[i][j] = np.random.uniform(centers[j] - np.exp(log_sigmas[j])/6, centers[j] + np.exp(log_sigmas[j])/6)
+                        init_population[i][j+W] = np.random.normal(log_sigmas[j], 0.001)
+                init_population[-1] = x0.copy()
+                problem = Problem(n_var=D, n_obj=self.task_num, n_constr=0, xl=np.ones(D) * x0.min(), xu=np.ones(D) * x0.max())
+                # prepare the algorithm to solve the specific problem (same arguments as for the minimize function)
+                algorithm = NSGA2(pop_size=NP, mutation=GaussianMutation(sigma=0.001), crossover=UniformCrossover(prob=0.5))
+                algorithm.setup(problem, termination=termination, seed=1, verbose=False)
+                # ea_model = copy.deepcopy(self.model)
+                reset = True
+
+            if not self.multi_input:
+                train_inputs, train_gts = self._process_data(train_loader)
+            else:
+                train_inputs, train_gts = {}, {}
+                for tn, task in enumerate(self.task_name):
+                    train_input, train_gt = self._process_data(train_loader[task])
+                    train_inputs[task], train_gts[task] = train_input, train_gt
+
+            # ask the algorithm for the next solution to be evaluated
+            pop = algorithm.ask()
+            
+            # get the design space values of the algorithm
+            X = pop.get("X")
+            if reset:
+                pop.set("X", init_population)
+                X = pop.get("X")
+            # evaluate the solution
+            losses = np.zeros((NP, self.task_num))
+            for i in range(NP):
+                x = X[i]
+                build_model_from_blocks_using_gaussian(self.model, W, total_weights, x, codebook, None, None)
+                # ea_model.eval()
+                with torch.no_grad():
+                    losses[i] = self.forward4loss(self.model, train_inputs, train_gts).detach().cpu().numpy()
+                    print(losses[i])
+
+            F = np.column_stack(losses)
+
+            static = StaticProblem(problem, F=F)
+            Evaluator().eval(static, pop)
+
+            # returned the evaluated individuals which have been evaluated or even modified
+            algorithm.tell(infills=pop)
+
+            res = algorithm.result()
+            pf_F = res.F
+            pop_F = res.pop.get("F")
+            plot_pareto_front_and_population(pf_F=pf_F, pop_F=pop_F, gd_point=gd_loss.detach().cpu().numpy(), iter=epoch, save_path=self.save_path+"/train/", loss_names=list(self.task_dict.keys()))
+
+            pf_val_losses = np.zeros((len(pf_F), self.task_num))
+            for i in range(len(pf_F)):
+                x = res.X[i]
+                build_model_from_blocks_using_gaussian(self.model, W, total_weights, x, codebook, None, None)
+                pf_val_losses[i] = self.test(test_dataloaders, epoch, mode='test', num_batch=None).detach().cpu().numpy()
+
+            plot_pareto_front_and_population(pf_F=pf_val_losses, pop_F=None, gd_point=gd_val_loss.detach().cpu().numpy(), iter=epoch, save_path=self.save_path+"/val/", loss_names=list(self.task_dict.keys()))
+
+            avg_rank_losses = np.mean(np.argsort(res.F, axis=1), axis=1)
+            build_model_from_blocks_using_gaussian(self.model, W, total_weights, 
+                                               np.mean(res.X[avg_rank_losses.argsort()[:5]], axis=0), 
+                                               codebook, None, None)
+            
+            curr_best_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
+            # if hv_indicator.do(res.F) > hv_indicator.do(gd_loss.detach().cpu().numpy().reshape(1, -1)):
+            if True:
+                best_weights = curr_best_weights
+
+            if val_dataloaders is not None:
+                self.meter.has_val = True
+                val_improvement = self.test(val_dataloaders, epoch, mode='val', return_improvement=True)
+            self.test(test_dataloaders, epoch, mode='test')
+            if self.scheduler is not None:
+                if self.scheduler_param['scheduler'] == 'reduce' and val_dataloaders is not None:
+                    self.scheduler.step(val_improvement)
+                else:
+                    self.scheduler.step()
+            # if self.scheduler is not None:
+            #     self.scheduler.step()
+            if self.save_path is not None and self.meter.best_result['epoch'] == epoch:
+                torch.save(self.model.state_dict(), os.path.join(self.save_path, 'best.pt'))
+                print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, 'best.pt')))
+
+
+            
+            
+        self.meter.display_best_result()
+        if return_weight:
+            return self.batch_weight
+
+
+
+    def train_evo_using_centers(self, train_dataloaders, test_dataloaders, epochs, 
+                  val_dataloaders=None, return_weight=False):
+        r'''The training process of multi-task learning.
+
+        Args:
+            train_dataloaders (dict or torch.utils.data.DataLoader): The dataloaders used for training. \
+                            If ``multi_input`` is ``True``, it is a dictionary of name-dataloader pairs. \
+                            Otherwise, it is a single dataloader which returns data and a dictionary \
+                            of name-label pairs in each iteration.
+
+            test_dataloaders (dict or torch.utils.data.DataLoader): The dataloaders used for the validation or testing. \
+                            The same structure with ``train_dataloaders``.
+            epochs (int): The total training epochs.
+            return_weight (bool): if ``True``, the loss weights will be returned.
+        '''
+        train_loader, train_batch = self._prepare_dataloaders(train_dataloaders)
+        train_batch = max(train_batch) if self.multi_input else train_batch
+        
+        self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
+        self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
+        self.model.epochs = epochs
+        print(list(self.task_dict.keys()))
+
+        from pymoo.algorithms.moo.nsga2 import NSGA2
+        from pymoo.core.evaluator import Evaluator
+        from pymoo.operators.mutation.pm import PolynomialMutation
+        from pymoo.operators.mutation.gauss import GaussianMutation
+        from pymoo.operators.crossover.ux import UniformCrossover
+        from pymoo.operators.crossover.pntx import TwoPointCrossover
+        from pymoo.core.problem import Problem
+        from pymoo.core.termination import NoTermination
+        from pymoo.problems.static import StaticProblem
+        from pymoo.indicators.hv import HV
+        from pymoo.visualization.scatter import Scatter
+
+        hv_indicator = HV(ref_point=np.ones(self.task_num)+0.1)
+
+        NP = self.kwargs['weight_args']['EVO_pop_size']
+        W_init = self.kwargs['weight_args']['EVO_ws']
+        initial_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
+        best_weights = initial_weights
+        total_weights = len(initial_weights)
+        # codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=best_weights.detach().cpu().numpy())
+        # W = len(centers)
+        # D = W * 2
+        # del centers, log_sigmas, assignment
+        algorithm = NSGA2(pop_size=NP, mutation=PolynomialMutation(eta=5))
+        # # D = None
+        # problem = Problem(n_var=D, n_obj=3, n_constr=0, xl=np.ones(D) * -1, xu=np.ones(D))
+        # # let the algorithm object never terminate and let the loop control it
+        termination = NoTermination()
+        # # prepare the algorithm to solve the specific problem (same arguments as for the minimize function)
+        # algorithm.setup(problem, termination=termination, seed=1, verbose=False)
+        for epoch in range(epochs):
+            self.model.epoch = epoch
+            self.meter.record_time('begin')
+            reset = False
+            if epoch % 10 == 0:
+                # self.model = copy.deepcopy(ea_model)
+                torch.nn.utils.vector_to_parameters(best_weights, self.model.parameters())
+                self.model.train()
+                for i, batch_index in enumerate(range(train_batch)):
+                    train_losses = []
+                    for sample_num in range(3 if self.weighting in ['MoDo', 'SDMGrad'] else 1):
+                        if not self.multi_input:
+                            train_inputs, train_gts = self._process_data(train_loader)
+                            # print(f"data shape: {train_inputs.shape}")
+                        else:
+                            train_inputs, train_gts = {}, {}
+                            for tn, task in enumerate(self.task_name):
+                                train_input, train_gt = self._process_data(train_loader[task])
+                                train_inputs[task], train_gts[task] = train_input, train_gt
+                                # print(f"task: {task}, data shape: {train_inputs[task].shape}")
+                        train_losses_, train_preds = self.forward4loss(self.model, train_inputs, train_gts, return_preds=True)
+                        train_losses.append(train_losses_)
+
+                    train_losses = torch.stack(train_losses).squeeze(0)
+                    if not self.multi_input:
+                            self.meter.update(train_preds, train_gts)
+                    else:
+                        for tn, task in enumerate(self.task_name):
+                            self.meter.update(train_preds[task], train_gts[task], task)
+
+                    self.optimizer.zero_grad(set_to_none=False)
+                    w = self.model.backward(train_losses, **self.kwargs['weight_args'])
+                    if w is not None:
+                        self.batch_weight[:, epoch, batch_index] = w
+                    self.optimizer.step()
+
+                    # if i == 0:
+                    #     break
+
+                self.meter.record_time('end')
+                self.meter.get_score()
+                self.model.train_loss_buffer[:, epoch] = self.meter.loss_item
+                self.meter.display(epoch=epoch, mode='train')
+                self.meter.reinit()
+                gd_loss = self.forward4loss(self.model, train_inputs, train_gts)
+                print(f"gd_loss: {gd_loss.detach().cpu().numpy()}")
+                gd_val_loss = self.test(test_dataloaders, epoch, mode='test', num_batch=None)
+
+                best_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
+                codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=best_weights.detach().cpu().numpy())
+                W = len(centers)
+                D = W
+                print(f"W: {W}, D: {D}")
+                x0 = centers
+                init_population = np.zeros((NP, D))
+                init_fitness = np.full(NP, np.inf)
+                for i in range(NP):
+                    for j in range(W):
+                        init_population[i][j] = np.random.uniform(centers[j] - np.exp(log_sigmas[j])/6, centers[j] + np.exp(log_sigmas[j])/6)
+                init_population[-1] = x0.copy()
+                problem = Problem(n_var=D, n_obj=self.task_num, n_constr=0, xl=np.ones(D) * x0.min(), xu=np.ones(D) * x0.max())
+                # prepare the algorithm to solve the specific problem (same arguments as for the minimize function)
+                algorithm = NSGA2(pop_size=NP, mutation=GaussianMutation(sigma=0.001), crossover=UniformCrossover(prob=0.5))
+                algorithm.setup(problem, termination=termination, seed=1, verbose=False)
+                # ea_model = copy.deepcopy(self.model)
+                reset = True
+
+            if not self.multi_input:
+                train_inputs, train_gts = self._process_data(train_loader)
+            else:
+                train_inputs, train_gts = {}, {}
+                for tn, task in enumerate(self.task_name):
+                    train_input, train_gt = self._process_data(train_loader[task])
+                    train_inputs[task], train_gts[task] = train_input, train_gt
+
+            # ask the algorithm for the next solution to be evaluated
+            pop = algorithm.ask()
+            
+            # get the design space values of the algorithm
+            X = pop.get("X")
+            if reset:
+                pop.set("X", init_population)
+                X = pop.get("X")
+            # evaluate the solution
+            losses = np.zeros((NP, self.task_num))
+            for i in range(NP):
+                x = X[i]
+                build_model_from_blocks_using_centers(self.model, W, total_weights, x, codebook, None, None)
+                # ea_model.eval()
+                with torch.no_grad():
+                    losses[i] = self.forward4loss(self.model, train_inputs, train_gts).detach().cpu().numpy()
+                    print(losses[i])
+
+            F = np.column_stack(losses)
+
+            static = StaticProblem(problem, F=F)
+            Evaluator().eval(static, pop)
+
+            # returned the evaluated individuals which have been evaluated or even modified
+            algorithm.tell(infills=pop)
+
+            res = algorithm.result()
+            pf_F = res.F
+            pop_F = res.pop.get("F")
+            plot_pareto_front_and_population(pf_F=pf_F, pop_F=pop_F, gd_point=gd_loss.detach().cpu().numpy(), iter=epoch, save_path=self.save_path+"/train/", loss_names=list(self.task_dict.keys()))
+
+            pf_val_losses = np.zeros((len(pf_F), self.task_num))
+            for i in range(len(pf_F)):
+                x = res.X[i]
+                build_model_from_blocks_using_centers(self.model, W, total_weights, x, codebook, None, None)
+                pf_val_losses[i] = self.test(test_dataloaders, epoch, mode='test', num_batch=None).detach().cpu().numpy()
+
+            plot_pareto_front_and_population(pf_F=pf_val_losses, pop_F=None, gd_point=gd_val_loss.detach().cpu().numpy(), iter=epoch, save_path=self.save_path+"/val/", loss_names=list(self.task_dict.keys()))
+
+            avg_rank_losses = np.mean(np.argsort(res.F, axis=1), axis=1)
+            build_model_from_blocks_using_centers(self.model, W, total_weights, 
+                                               np.mean(res.X[avg_rank_losses.argsort()[:5]], axis=0), 
+                                               codebook, None, None)
+            
+            curr_best_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
+            # if hv_indicator.do(res.F) > hv_indicator.do(gd_loss.detach().cpu().numpy().reshape(1, -1)):
+            if True:
+                best_weights = curr_best_weights
+
+            if val_dataloaders is not None:
+                self.meter.has_val = True
+                val_improvement = self.test(val_dataloaders, epoch, mode='val', return_improvement=True)
+            self.test(test_dataloaders, epoch, mode='test')
+            if self.scheduler is not None:
+                if self.scheduler_param['scheduler'] == 'reduce' and val_dataloaders is not None:
+                    self.scheduler.step(val_improvement)
+                else:
+                    self.scheduler.step()
+            # if self.scheduler is not None:
+            #     self.scheduler.step()
+            if self.save_path is not None and self.meter.best_result['epoch'] == epoch:
+                torch.save(self.model.state_dict(), os.path.join(self.save_path, 'best.pt'))
+                print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, 'best.pt')))
+
+
+            
+            
+        self.meter.display_best_result()
+        if return_weight:
+            return self.batch_weight

@@ -1,4 +1,5 @@
 import argparse
+import os
 import numpy as np
 import torch
 
@@ -85,6 +86,11 @@ _parser.add_argument('--inner_lr', type=float, default=0.1, help='inner lr')
 _parser.add_argument('--inner_step', type=int, default=5, help=' ')
 ## FORUM
 _parser.add_argument('--FORUM_phi', type=float, default=0.1, help=' ') # FORUM
+
+#### evolutionary methods
+_parser.add_argument('--EVO_pop_size', type=int, default=100, help='Population size (NP)')
+_parser.add_argument('--EVO_niter', type=int, default=100, help='Number of iterations')
+_parser.add_argument('--EVO_ws', type=int, default=1024, help='Number of weight sharing')
 
 # args for architecture
 ## CGC
@@ -183,6 +189,11 @@ def prepare_args(params):
             kwargs['weight_args']['inner_lr'] = params.inner_lr
         elif params.weighting in ['MOML']:
             kwargs['weight_args']['inner_lr'] = params.inner_lr
+    elif params.weighting in ['EVO']:
+        kwargs['weight_args']['EVO_pop_size'] = params.EVO_pop_size
+        kwargs['weight_args']['EVO_niter'] = params.EVO_niter
+        kwargs['weight_args']['EVO_ws'] = params.EVO_ws
+        # print(kwargs['weight_args']['EVO_pop_size'])
     else:
         raise ValueError('No support weighting method {}'.format(params.weighting)) 
         
@@ -242,3 +253,15 @@ def _display(params, kwargs, optim_param, scheduler_param):
         print('Scheduler Configuration:')
         for k, v in scheduler_param.items():
             print('\t'+k+':', v)
+    if params.save_path is not None:
+        if os.path.exists(params.save_path):
+            print('Save path already exists, please check if you want to restart.')
+        else:
+            os.path.makedirs(params.save_path, exist_ok=True)
+            print('Save path created: {}'.format(params.save_path))
+
+    if params.load_path is not None:
+        if os.path.exists(params.load_path):
+            print('Load path exists: {}'.format(params.load_path))
+        else:
+            raise ValueError('Load path does not exist: {}, please check!'.format(params.load_path))
