@@ -1120,19 +1120,20 @@ class Trainer(nn.Module):
             pop_F = res.pop.get("F")
             plot_pareto_front_and_population(pf_F=pf_F, pop_F=pop_F, gd_point=gd_loss, iter=epoch, save_path=self.save_path+"/train/", loss_names=list(self.task_dict.keys()))
 
-            pf_val_losses = np.zeros((len(pf_F), self.task_num))
-            pf_val_results = []
-            print(f"********** EVO Pareto Front Evaluation **********")
-            for i in range(len(pf_F)):
-                x = res.X[i]
-                build_model_from_blocks_using_centers(self.model, W, total_weights, x, codebook, None, None)
-                losses, results = self.test(test_dataloaders, epoch, mode='test', num_batch=None, verbose=False)
-                pf_val_losses[i] = losses
-                pf_val_results.append(results)
-            # print(pf_val_losses)
-            print(pd.DataFrame(pf_val_results))
+            if self.task_num <= 3 and len(pf_F) < 5:
+                pf_val_losses = np.zeros((len(pf_F), self.task_num))
+                pf_val_results = []
+                print(f"********** EVO Pareto Front Evaluation **********")
+                for i in range(len(pf_F)):
+                    x = res.X[i]
+                    build_model_from_blocks_using_centers(self.model, W, total_weights, x, codebook, None, None)
+                    losses, results = self.test(test_dataloaders, epoch, mode='test', num_batch=None, verbose=False)
+                    pf_val_losses[i] = losses
+                    pf_val_results.append(results)
+                # print(pf_val_losses)
+                print(pd.DataFrame(pf_val_results))
 
-            plot_pareto_front_and_population(pf_F=pf_val_losses, pop_F=None, gd_point=gd_val_loss, iter=epoch, save_path=self.save_path+"/val/", loss_names=list(self.task_dict.keys()))
+                plot_pareto_front_and_population(pf_F=pf_val_losses, pop_F=None, gd_point=gd_val_loss, iter=epoch, save_path=self.save_path+"/val/", loss_names=list(self.task_dict.keys()))
 
             # avg_rank_losses = np.mean(np.argsort(res.F, axis=1), axis=1)
             avg_rank_losses = np.mean(res.F, axis=1)
