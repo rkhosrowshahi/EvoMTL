@@ -31,7 +31,7 @@ def main(params):
         dataset=city_train_set,
         batch_size=params.train_bs,
         shuffle=True,
-        num_workers=2,
+        num_workers=params.num_workers,
         pin_memory=True,
         drop_last=True)
     
@@ -39,7 +39,7 @@ def main(params):
         dataset=city_test_set,
         batch_size=params.test_bs,
         shuffle=False,
-        num_workers=2,
+        num_workers=params.num_workers,
         pin_memory=True)
     
     # define tasks

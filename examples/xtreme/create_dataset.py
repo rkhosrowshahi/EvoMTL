@@ -15,7 +15,7 @@ def DataloaderSC(lang_list,
                 mode_list,
                 data_dir,
                 max_seq_length,
-                batch_size, small_train=None):
+                batch_size, small_train=None, num_workers=2):
     lang2id = None # if model_type != 'xlm'
     if 'pawsx' in data_dir.split('/')[-1]:
         processor = PawsxProcessor()
@@ -83,7 +83,7 @@ def DataloaderSC(lang_list,
             dataloader[lang][mode] = DataLoader(dataset, 
                                                 sampler=sampler, 
                                                 batch_size=batch_size, 
-                                                num_workers=2, 
+                                                num_workers=num_workers, 
                                                 pin_memory=True,
                                                 drop_last=drop_last)
             iter_dataloader[lang][mode] = iter(dataloader[lang][mode])

@@ -17,6 +17,46 @@ from torch_geometric.nn import NNConv
 from torch_geometric.nn.aggr import Set2Set
 from torch_geometric.utils import remove_self_loops
 
+class QM9Dataset(Dataset):
+    def __init__(self, dataset, target: list):
+        self.dataset = dataset
+        self.target = target
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        data = self.dataset.__getitem__(idx)
+        label = {}
+        for tn in self.target:
+            label[str(tn)] = data.y[:, tn]
+        return data, label
+
+class Complete(object):
+    def __call__(self, data):
+        device = data.edge_index.device
+
+        row = torch.arange(data.num_nodes, dtype=torch.long, device=device)
+        col = torch.arange(data.num_nodes, dtype=torch.long, device=device)
+
+        row = row.view(-1, 1).repeat(1, data.num_nodes).view(-1)
+        col = col.repeat(data.num_nodes)
+        edge_index = torch.stack([row, col], dim=0)
+
+        edge_attr = None
+        if data.edge_attr is not None:
+            idx = data.edge_index[0] * data.num_nodes + data.edge_index[1]
+            size = list(data.edge_attr.size())
+            size[0] = data.num_nodes * data.num_nodes
+            edge_attr = data.edge_attr.new_zeros(size)
+            edge_attr[idx] = data.edge_attr
+
+        edge_index, edge_attr = remove_self_loops(edge_index, edge_attr)
+        data.edge_attr = edge_attr
+        data.edge_index = edge_index
+
+        return data
+
 def parse_args(parser):
     parser.add_argument('--bs', default=128, type=int, help='batch size')
     parser.add_argument('--epochs', default=300, type=int, help='training epochs')
@@ -36,31 +76,6 @@ def main(params):
 
     target = params.target
 
-    class Complete(object):
-        def __call__(self, data):
-            device = data.edge_index.device
-
-            row = torch.arange(data.num_nodes, dtype=torch.long, device=device)
-            col = torch.arange(data.num_nodes, dtype=torch.long, device=device)
-
-            row = row.view(-1, 1).repeat(1, data.num_nodes).view(-1)
-            col = col.repeat(data.num_nodes)
-            edge_index = torch.stack([row, col], dim=0)
-
-            edge_attr = None
-            if data.edge_attr is not None:
-                idx = data.edge_index[0] * data.num_nodes + data.edge_index[1]
-                size = list(data.edge_attr.size())
-                size[0] = data.num_nodes * data.num_nodes
-                edge_attr = data.edge_attr.new_zeros(size)
-                edge_attr[idx] = data.edge_attr
-
-            edge_index, edge_attr = remove_self_loops(edge_index, edge_attr)
-            data.edge_attr = edge_attr
-            data.edge_index = edge_index
-
-            return data
-
     transform = T.Compose([Complete(), T.Distance(norm=False)])
     dataset = QM9(params.dataset_path, transform=transform)
 
@@ -69,30 +84,15 @@ def main(params):
     std = dataset.data.y.std(dim=0, keepdim=True)
     dataset.data.y = (dataset.data.y - mean) / std
 
-    class QM9Dataset(Dataset):
-        def __init__(self, dataset, target: list):
-            self.dataset = dataset
-            self.target = target
-
-        def __len__(self):
-            return len(self.dataset)
-
-        def __getitem__(self, idx):
-            data = self.dataset.__getitem__(idx)
-            label = {}
-            for tn in self.target:
-                label[str(tn)] = data.y[:, tn]
-            return data, label
-
     # Split datasets.
     split = torch.load('./random_split.t')
     test_dataset = QM9Dataset(dataset[split][:10000], target)
     val_dataset = QM9Dataset(dataset[split][10000:20000], target)
     train_dataset = QM9Dataset(dataset[split][20000:], target)
 
-    test_loader = DataLoader(test_dataset, batch_size=params.bs, shuffle=False, num_workers=2, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=params.bs, shuffle=False, num_workers=2, pin_memory=True)
-    train_loader = DataLoader(train_dataset, batch_size=params.bs, shuffle=True, num_workers=2, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=params.bs, shuffle=False, num_workers=params.num_workers, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=params.bs, shuffle=False, num_workers=params.num_workers, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=params.bs, shuffle=True, num_workers=params.num_workers, pin_memory=True)
 
     # define tasks
     task_dict = {}
@@ -123,6 +123,9 @@ def main(params):
         def forward(self, data):
             out = F.relu(self.lin0(data.x))
             h = out.unsqueeze(0)
+
+            # Flatten GRU parameters for better performance
+            self.gru.flatten_parameters()
 
             for i in range(3):
                 m = F.relu(self.conv(out, data.edge_index, data.edge_attr))

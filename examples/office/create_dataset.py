@@ -27,7 +27,7 @@ class office_Dataset(Dataset):
     def __len__(self):
         return len(self.img_list)
     
-def office_dataloader(dataset, batchsize, root_path):
+def office_dataloader(dataset, batchsize, root_path, num_workers=0):
     if dataset == 'office-31':
         tasks = ['amazon', 'dslr', 'webcam']
     elif dataset == 'office-home':
@@ -43,7 +43,7 @@ def office_dataloader(dataset, batchsize, root_path):
             txt_dataset = office_Dataset(dataset, root_path, d, mode)
 #             print(d, mode, len(txt_dataset))
             data_loader[d][mode] = DataLoader(txt_dataset, 
-                                              num_workers=0, 
+                                              num_workers=num_workers, 
                                               pin_memory=True, 
                                               batch_size=batchsize, 
                                               shuffle=shuffle,

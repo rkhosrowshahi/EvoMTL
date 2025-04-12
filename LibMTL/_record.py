@@ -60,7 +60,9 @@ class _PerformanceMeter(object):
             print('| ', end='')
         print('TIME')
     
-    def display(self, mode, epoch):
+    def display(self, mode, epoch, verbose=True):
+        if not verbose:
+            return
         if epoch is not None:
             if epoch == 0 and self.base_result is None and mode==('val' if self.has_val else 'test'):
                 self.base_result = self.results
@@ -115,3 +117,14 @@ class _PerformanceMeter(object):
             self.metrics[task].reinit()
         self.loss_item = np.zeros(self.task_num)
         self.results = {task:[] for task in self.task_name}
+
+    def get_losses(self):
+        return self.loss_item
+
+    def get_results(self):
+        results = {}
+        for tn, task in enumerate(self.task_name):
+            for i in range(len(self.results[task])):
+                results[f"{task}_{self.task_dict[task]['metrics'][i]}"] = self.results[task][i]
+        results['avg'] = [np.mean([res for res in results.values()])]
+        return results

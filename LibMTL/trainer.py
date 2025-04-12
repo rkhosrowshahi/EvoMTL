@@ -1,3 +1,5 @@
+from collections import defaultdict
+import pandas as pd
 import torch, os, copy, torch_geometric
 import torch.nn as nn
 import torch.nn.functional as F
@@ -309,7 +311,7 @@ class Trainer(nn.Module):
             return self.batch_weight
 
 
-    def test(self, test_dataloaders, epoch=None, mode='test', return_improvement=False, num_batch=None):
+    def test(self, test_dataloaders, epoch=None, mode='test', return_improvement=False, num_batch=None, verbose=True):
         r'''The test process of multi-task learning.
 
         Args:
@@ -353,12 +355,14 @@ class Trainer(nn.Module):
                             break
         self.meter.record_time('end')
         self.meter.get_score()
-        self.meter.display(epoch=epoch, mode=mode)
+        self.meter.display(epoch=epoch, mode=mode, verbose=verbose)
         improvement = self.meter.improvement
+        losses = self.meter.get_losses()
+        results = self.meter.get_results()
         self.meter.reinit()
         if return_improvement:
             return improvement
-        return total_loss / total_batch
+        return losses, results
 
 
     ### for bilevel methods
@@ -590,7 +594,7 @@ class Trainer(nn.Module):
         for tn in range(self.task_num):
             g_F_tn = torch.autograd.grad(losses[tn], meta_model.parameters(), retain_graph=True)
             g_F_tn = torch.cat([g.view(-1) for g in g_F_tn]) # 1 x d
-            alpha_grad[tn] = - inner_lr * g_F_tn @ g_f.t() @ g_s
+            alpha_grad[tn] = - inner_lr * g_F_tn @ g_s
         loss_data = torch.tensor([loss.item() for loss in losses]).to(self.device)
         from LibMTL.weighting.MGDA import MGDA
         MGDA_solver = MGDA()
@@ -882,7 +886,7 @@ class Trainer(nn.Module):
                 # ea_model.eval()
                 with torch.no_grad():
                     losses[i] = self.forward4loss(self.model, train_inputs, train_gts).detach().cpu().numpy()
-                    print(losses[i])
+                    # print(losses[i])
 
             F = np.column_stack(losses)
 
@@ -907,7 +911,7 @@ class Trainer(nn.Module):
 
             avg_rank_losses = np.mean(np.argsort(res.F, axis=1), axis=1)
             build_model_from_blocks_using_gaussian(self.model, W, total_weights, 
-                                               np.mean(res.X[avg_rank_losses.argsort()[:5]], axis=0), 
+                                               np.mean(res.X[avg_rank_losses.argsort()[:1]], axis=0), 
                                                codebook, None, None)
             
             curr_best_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
@@ -960,9 +964,10 @@ class Trainer(nn.Module):
         self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
         self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
         self.model.epochs = epochs
-        print(list(self.task_dict.keys()))
+        # print(list(self.task_dict.keys()))
 
         from pymoo.algorithms.moo.nsga2 import NSGA2
+        from pymoo.algorithms.moo.nsga3 import NSGA3
         from pymoo.core.evaluator import Evaluator
         from pymoo.operators.mutation.pm import PolynomialMutation
         from pymoo.operators.mutation.gauss import GaussianMutation
@@ -974,7 +979,7 @@ class Trainer(nn.Module):
         from pymoo.indicators.hv import HV
         from pymoo.visualization.scatter import Scatter
 
-        hv_indicator = HV(ref_point=np.ones(self.task_num)+0.1)
+        hv_indicator = HV(ref_point=np.ones(self.task_num)+0.01)
 
         NP = self.kwargs['weight_args']['EVO_pop_size']
         W_init = self.kwargs['weight_args']['EVO_ws']
@@ -1000,6 +1005,7 @@ class Trainer(nn.Module):
                 # self.model = copy.deepcopy(ea_model)
                 torch.nn.utils.vector_to_parameters(best_weights, self.model.parameters())
                 self.model.train()
+                gd_loss = 0
                 for i, batch_index in enumerate(range(train_batch)):
                     train_losses = []
                     for sample_num in range(3 if self.weighting in ['MoDo', 'SDMGrad'] else 1):
@@ -1027,18 +1033,26 @@ class Trainer(nn.Module):
                     if w is not None:
                         self.batch_weight[:, epoch, batch_index] = w
                     self.optimizer.step()
+                    gd_loss += train_losses.detach().cpu().numpy()
 
                     # if i == 0:
                     #     break
-
+                gd_loss /= train_batch
+                
+                print(f"********** SGD Evaluation **********")
                 self.meter.record_time('end')
                 self.meter.get_score()
                 self.model.train_loss_buffer[:, epoch] = self.meter.loss_item
                 self.meter.display(epoch=epoch, mode='train')
                 self.meter.reinit()
-                gd_loss = self.forward4loss(self.model, train_inputs, train_gts)
-                print(f"gd_loss: {gd_loss.detach().cpu().numpy()}")
-                gd_val_loss = self.test(test_dataloaders, epoch, mode='test', num_batch=None)
+                
+                # gd_loss = self.forward4loss(self.model, train_inputs, train_gts)
+                # print(f"train gd loss: {gd_loss.detach().cpu().numpy()}")
+                gd_val_loss, gd_val_results = self.test(test_dataloaders, epoch, mode='test', num_batch=None, verbose=False)
+                print(gd_val_loss)
+                # gd_val_results['avg'] = [np.mean([res for res in gd_val_results.values()])]
+                print(pd.DataFrame(gd_val_results))
+
 
                 best_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
                 codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=best_weights.detach().cpu().numpy())
@@ -1080,46 +1094,72 @@ class Trainer(nn.Module):
             for i in range(NP):
                 x = X[i]
                 build_model_from_blocks_using_centers(self.model, W, total_weights, x, codebook, None, None)
-                # ea_model.eval()
+                self.model.eval()
                 with torch.no_grad():
                     losses[i] = self.forward4loss(self.model, train_inputs, train_gts).detach().cpu().numpy()
-                    print(losses[i])
 
             F = np.column_stack(losses)
-
             static = StaticProblem(problem, F=F)
             Evaluator().eval(static, pop)
 
-            # returned the evaluated individuals which have been evaluated or even modified
+            if len(algorithm.pop.get("X")) > 0:
+                X = algorithm.pop.get("X")
+                F = algorithm.pop.get("F")
+                for i in range(NP):
+                    x = X[i]
+                    build_model_from_blocks_using_centers(self.model, W, total_weights, x, codebook, None, None)
+                    self.model.eval()
+                    with torch.no_grad():
+                        F[i] = self.forward4loss(self.model, train_inputs, train_gts).detach().cpu().numpy()
+                algorithm.pop.set("F", F)
+            
             algorithm.tell(infills=pop)
 
             res = algorithm.result()
             pf_F = res.F
             pop_F = res.pop.get("F")
-            plot_pareto_front_and_population(pf_F=pf_F, pop_F=pop_F, gd_point=gd_loss.detach().cpu().numpy(), iter=epoch, save_path=self.save_path+"/train/", loss_names=list(self.task_dict.keys()))
+            plot_pareto_front_and_population(pf_F=pf_F, pop_F=pop_F, gd_point=gd_loss, iter=epoch, save_path=self.save_path+"/train/", loss_names=list(self.task_dict.keys()))
 
             pf_val_losses = np.zeros((len(pf_F), self.task_num))
+            pf_val_results = []
+            print(f"********** EVO Pareto Front Evaluation **********")
             for i in range(len(pf_F)):
                 x = res.X[i]
                 build_model_from_blocks_using_centers(self.model, W, total_weights, x, codebook, None, None)
-                pf_val_losses[i] = self.test(test_dataloaders, epoch, mode='test', num_batch=None).detach().cpu().numpy()
+                losses, results = self.test(test_dataloaders, epoch, mode='test', num_batch=None, verbose=False)
+                pf_val_losses[i] = losses
+                pf_val_results.append(results)
+            # print(pf_val_losses)
+            print(pd.DataFrame(pf_val_results))
 
-            plot_pareto_front_and_population(pf_F=pf_val_losses, pop_F=None, gd_point=gd_val_loss.detach().cpu().numpy(), iter=epoch, save_path=self.save_path+"/val/", loss_names=list(self.task_dict.keys()))
+            plot_pareto_front_and_population(pf_F=pf_val_losses, pop_F=None, gd_point=gd_val_loss, iter=epoch, save_path=self.save_path+"/val/", loss_names=list(self.task_dict.keys()))
 
-            avg_rank_losses = np.mean(np.argsort(res.F, axis=1), axis=1)
+            # avg_rank_losses = np.mean(np.argsort(res.F, axis=1), axis=1)
+            avg_rank_losses = np.mean(res.F, axis=1)
+            print(f"********** EVO Pareto Front Average Loss (on training) **********")
+            # print(f"Pareto Front Average Loss: {avg_rank_losses}, Ranking: {avg_rank_losses.argsort()}")
+            df = pd.DataFrame({
+                "Average Loss": avg_rank_losses,
+                "Ranking": pd.Series(avg_rank_losses).rank(method='min', ascending=True).astype(int)
+            })
+            print(df)
+            print(f"Top solution: {avg_rank_losses.min()}, {np.argmin(avg_rank_losses)}")
+            candidate = res.X[np.argmin(avg_rank_losses)]
             build_model_from_blocks_using_centers(self.model, W, total_weights, 
-                                               np.mean(res.X[avg_rank_losses.argsort()[:5]], axis=0), 
+                                               candidate, 
                                                codebook, None, None)
-            
             curr_best_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
             # if hv_indicator.do(res.F) > hv_indicator.do(gd_loss.detach().cpu().numpy().reshape(1, -1)):
             if True:
                 best_weights = curr_best_weights
 
+            print(f"********** Best Solution Evaluation **********")
             if val_dataloaders is not None:
                 self.meter.has_val = True
                 val_improvement = self.test(val_dataloaders, epoch, mode='val', return_improvement=True)
-            self.test(test_dataloaders, epoch, mode='test')
+            losses, results = self.test(test_dataloaders, epoch, mode='test')
+            # print(losses)
+            print(pd.DataFrame(results))
             if self.scheduler is not None:
                 if self.scheduler_param['scheduler'] == 'reduce' and val_dataloaders is not None:
                     self.scheduler.step(val_improvement)

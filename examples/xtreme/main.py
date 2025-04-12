@@ -33,6 +33,7 @@ def main(params):
                                       data_dir=data_dir,
                                       max_seq_length=128,
                                       batch_size=params.bs,
+                                      num_workers=params.num_workers,
                             )
     train_dataloaders = {task: dataloader[task]['train'] for task in lang_list}
     val_dataloaders = {task: dataloader[task]['dev'] for task in lang_list}

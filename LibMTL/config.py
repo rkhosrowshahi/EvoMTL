@@ -8,6 +8,7 @@ _parser = argparse.ArgumentParser(description='Configuration for LibMTL')
 _parser.add_argument('--mode', type=str, default='train', help='train, test')
 _parser.add_argument('--seed', type=int, default=0, help='random seed')
 _parser.add_argument('--gpu_id', default='0', type=str, help='gpu_id') 
+_parser.add_argument('--num_workers', default=2, type=int, help='number of workers for dataloader')
 _parser.add_argument('--weighting', type=str, default='EW',
     help='loss weighing strategies, option: EW, UW, GradNorm, GLS, RLW, \
         MGDA, PCGrad, GradVac, CAGrad, GradDrop, DWA, IMTL')
@@ -217,9 +218,11 @@ def prepare_args(params):
         raise ValueError('No support optim method {}'.format(params.optim))
         
     if params.scheduler is not None:
-        if params.scheduler in ['step', 'cos', 'exp']:
+        if params.scheduler in ['step', 'cos', 'exp', 'reduce']:
             if params.scheduler == 'step':
                 scheduler_param = {'scheduler': 'step', 'step_size': params.step_size, 'gamma': params.gamma}
+            elif params.scheduler == 'reduce':
+                scheduler_param = {'scheduler': 'reduce', 'mode': 'max', 'factor': 0.7, 'patience': 5, 'min_lr': 0.00001}
         else:
             raise ValueError('No support scheduler method {}'.format(params.scheduler))
     else:
@@ -257,7 +260,9 @@ def _display(params, kwargs, optim_param, scheduler_param):
         if os.path.exists(params.save_path):
             print('Save path already exists, please check if you want to restart.')
         else:
-            os.path.makedirs(params.save_path, exist_ok=True)
+            os.makedirs(params.save_path, exist_ok=True)
+            os.makedirs(os.path.join(params.save_path, 'train'), exist_ok=True)
+            os.makedirs(os.path.join(params.save_path, 'val'), exist_ok=True)
             print('Save path created: {}'.format(params.save_path))
 
     if params.load_path is not None:
