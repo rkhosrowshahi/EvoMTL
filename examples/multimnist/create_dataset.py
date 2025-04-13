@@ -241,7 +241,7 @@ class MultiMNISTDataset3Digits(VisionDataset):
         target = tuple(t for t in target)
         # target = {n: t for n, t in zip(self.task_names, target)}
         # return img, target
-        return img, {self.task_names[0]: target[0], self.task_names[1]: target[1]}
+        return img, {self.task_names[0]: target[0], self.task_names[1]: target[1], self.task_names[2]: target[2]}
 
     def __len__(self):
         return len(self.data)
