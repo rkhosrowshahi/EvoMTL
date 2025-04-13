@@ -986,17 +986,8 @@ class Trainer(nn.Module):
         initial_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
         best_weights = initial_weights
         total_weights = len(initial_weights)
-        # codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=best_weights.detach().cpu().numpy())
-        # W = len(centers)
-        # D = W * 2
-        # del centers, log_sigmas, assignment
         algorithm = NSGA2(pop_size=NP, mutation=PolynomialMutation(eta=5))
-        # # D = None
-        # problem = Problem(n_var=D, n_obj=3, n_constr=0, xl=np.ones(D) * -1, xu=np.ones(D))
-        # # let the algorithm object never terminate and let the loop control it
         termination = NoTermination()
-        # # prepare the algorithm to solve the specific problem (same arguments as for the minimize function)
-        # algorithm.setup(problem, termination=termination, seed=1, verbose=False)
         for epoch in range(epochs):
             self.model.epoch = epoch
             self.meter.record_time('begin')
@@ -1052,7 +1043,6 @@ class Trainer(nn.Module):
                 print(gd_val_loss)
                 # gd_val_results['avg'] = [np.mean([res for res in gd_val_results.values()])]
                 print(pd.DataFrame(gd_val_results))
-
 
                 best_weights = torch.nn.utils.parameters_to_vector(self.model.parameters())
                 codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=best_weights.detach().cpu().numpy())
@@ -1120,7 +1110,7 @@ class Trainer(nn.Module):
             pop_F = res.pop.get("F")
             plot_pareto_front_and_population(pf_F=pf_F, pop_F=pop_F, gd_point=gd_loss, iter=epoch, save_path=self.save_path+"/train/", loss_names=list(self.task_dict.keys()))
 
-            if self.task_num <= 3 and len(pf_F) < 5:
+            if self.task_num <= 3:
                 pf_val_losses = np.zeros((len(pf_F), self.task_num))
                 pf_val_results = []
                 print(f"********** EVO Pareto Front Evaluation **********")
@@ -1135,17 +1125,21 @@ class Trainer(nn.Module):
 
                 plot_pareto_front_and_population(pf_F=pf_val_losses, pop_F=None, gd_point=gd_val_loss, iter=epoch, save_path=self.save_path+"/val/", loss_names=list(self.task_dict.keys()))
 
-            # avg_rank_losses = np.mean(np.argsort(res.F, axis=1), axis=1)
-            avg_rank_losses = np.mean(res.F, axis=1)
+            print(np.argsort(res.F, axis=0))
+            avg_rank = np.mean(np.argsort(res.F, axis=0), axis=1)
+            avg_losses = np.mean(res.F, axis=1)
             print(f"********** EVO Pareto Front Average Loss (on training) **********")
             # print(f"Pareto Front Average Loss: {avg_rank_losses}, Ranking: {avg_rank_losses.argsort()}")
             df = pd.DataFrame({
-                "Average Loss": avg_rank_losses,
-                "Ranking": pd.Series(avg_rank_losses).rank(method='min', ascending=True).astype(int)
+                "Average Loss": avg_losses,
+                "Average Rank": avg_rank,
+                "Ranking": pd.Series(avg_rank).rank(method='min', ascending=True).astype(int)
             })
             print(df)
-            print(f"Top solution: {avg_rank_losses.min()}, {np.argmin(avg_rank_losses)}")
-            candidate = res.X[np.argmin(avg_rank_losses)]
+            # print(f"Top solution: {avg_rank_losses.min()}, {np.argmin(avg_rank_losses)}")
+            # candidate = res.X[np.argmin(avg_rank_losses)]
+            num_solutions = max(2, int(0.2 * len(res.X)))
+            candidate = np.mean(res.X[avg_rank.argsort()[:num_solutions]], axis=0)
             build_model_from_blocks_using_centers(self.model, W, total_weights, 
                                                candidate, 
                                                codebook, None, None)
@@ -1172,9 +1166,6 @@ class Trainer(nn.Module):
                 torch.save(self.model.state_dict(), os.path.join(self.save_path, 'best.pt'))
                 print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, 'best.pt')))
 
-
-            
-            
         self.meter.display_best_result()
         if return_weight:
             return self.batch_weight

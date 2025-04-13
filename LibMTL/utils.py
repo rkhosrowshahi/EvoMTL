@@ -215,12 +215,12 @@ def plot_pareto_front_and_population(pf_F, pop_F, gd_point=None, iter=None, save
         plt.figure()
         
         if pop_F is not None:
-            plt.scatter(pop_F[:, 0], pop_F[:, 1], facecolors='none', edgecolors='blue', label="Population")
+            plt.scatter(pop_F[:, 0], pop_F[:, 1], facecolors='none', edgecolors='blue', label="Population", marker='o', s=50)
         if pf_F is not None:
-            plt.scatter(pf_F[:, 0], pf_F[:, 1], color="red", label="Pareto Front")
+            plt.scatter(pf_F[:, 0], pf_F[:, 1], color="red", label="Pareto Front", marker='o', s=10)
         
         if gd_point is not None:
-            plt.scatter(gd_point[0], gd_point[1], color="green", label="GD")
+            plt.scatter(gd_point[0], gd_point[1], color="green", label="GD", marker='*', s=10)
         plt.xlabel(f'{loss_names[0]}')
         plt.ylabel(f'{loss_names[1]}')
         # plt.show()
@@ -237,7 +237,7 @@ def plot_pareto_front_and_population(pf_F, pop_F, gd_point=None, iter=None, save
             ax.scatter(pf_F[:, 0], pf_F[:, 1], pf_F[:, 2], color="red", label="Pareto Front", marker='o', s=10)
         
         if gd_point is not None:
-            ax.scatter(gd_point[0], gd_point[1], gd_point[2], color="green", label="GD")
+            ax.scatter(gd_point[0], gd_point[1], gd_point[2], color="green", label="GD", marker='*', s=10)
         # plt.show()
         ax.set_xlabel(f'{loss_names[0]}')
         ax.set_ylabel(f'{loss_names[1]}')
