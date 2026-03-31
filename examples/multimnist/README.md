@@ -30,7 +30,7 @@ Some important arguments are described as follows:
 - ``arch``: The MTL architecture. Refer to [here](../../LibMTL#supported-algorithms).
 - ``gpu_id``: The id of gpu. The default value is '0'.
 - ``seed``: The random seed for reproducibility. The default value is 0.
-- ``scheduler``: The type of the learning rate scheduler. We recommend to use 'step' here.
+- ``scheduler``: Optional learning rate scheduler (e.g. ``step``). For MultiMNIST the default is no scheduler (constant learning rate).
 - ``optim``: The type of the optimizer. We recommend to use 'adam' here.
 - ``dataset_path``: The path where the MultiMNIST dataset will be generated.
 - ``train_bs``: The batch size of training data. The default value is 64.
@@ -47,25 +47,25 @@ python main.py -h
 If you understand those command-line arguments, you can train an MTL model by executing the following command.
 
 ```shell
-python main.py --dataset multimnist --weighting WEIGHTING --arch ARCH --dataset_path PATH/multimnist --gpu_id GPU_ID --scheduler step --mode train --save_path PATH
+python main.py --dataset multimnist --weighting WEIGHTING --arch ARCH --dataset_path PATH/multimnist --gpu_id GPU_ID --mode train --save_path PATH
 ```
 
 For MultiMNIST3D, use:
 
 ```shell
-python main.py --dataset multimnist3 --weighting WEIGHTING --arch ARCH --dataset_path PATH/multimnist3 --gpu_id GPU_ID --scheduler step --mode train --save_path PATH
+python main.py --dataset multimnist3 --weighting WEIGHTING --arch ARCH --dataset_path PATH/multimnist3 --gpu_id GPU_ID --mode train --save_path PATH
 ```
 
 You can test the trained MTL model by running the following command.
 
 ```shell
-python main.py --dataset multimnist --weighting WEIGHTING --arch ARCH --dataset_path PATH/multimnist --gpu_id GPU_ID --scheduler step --mode test --load_path PATH
+python main.py --dataset multimnist --weighting WEIGHTING --arch ARCH --dataset_path PATH/multimnist --gpu_id GPU_ID --mode test --load_path PATH
 ```
 
 For MultiMNIST3D, use:
 
 ```shell
-python main.py --dataset multimnist3 --weighting WEIGHTING --arch ARCH --dataset_path PATH/multimnist3 --gpu_id GPU_ID --scheduler step --mode test --load_path PATH
+python main.py --dataset multimnist3 --weighting WEIGHTING --arch ARCH --dataset_path PATH/multimnist3 --gpu_id GPU_ID --mode test --load_path PATH
 ```
 
 ### References

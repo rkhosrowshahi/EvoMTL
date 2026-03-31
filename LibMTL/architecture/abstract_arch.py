@@ -58,6 +58,46 @@ class AbsArchitecture(nn.Module):
         r"""Return the shared parameters of the model.
         """
         return self.encoder.parameters()
+    
+    def get_all_params(self):
+        r"""Return all parameters of the model.
+        """
+        all_params = None
+    
+        all_params = []
+        for name, param in self.encoder.named_parameters():
+            all_params.append((f'encoder.{name}', param))
+        for task in self.task_name:
+            for name, param in self.decoders[task].named_parameters():
+                all_params.append((f'decoders.{task}.{name}', param))
+        return all_params
+    
+    def set_all_params(self, params):
+        r"""Set all parameters of the model.
+        """
+        # Set encoder parameters
+        encoder_params = []
+        decoder_params = {}
+        
+        # Split params into encoder and decoder based on param names
+        for name, param in params:
+            if name.startswith('encoder.'):
+                encoder_params.append((name[8:], param))
+            else:
+                task = name.split('.')[1]
+                if task not in decoder_params:
+                    decoder_params[task] = []
+                decoder_params[task].append((name.split('.', 2)[2], param))
+                
+        # Load parameters into models
+        for name, param in encoder_params:
+            state_dict = self.encoder.state_dict()
+            state_dict[name].copy_(param)
+            
+        for task in self.task_name:
+            state_dict = self.decoders[task].state_dict()
+            for name, param in decoder_params[task]:
+                state_dict[name].copy_(param)
 
     def zero_grad_share_params(self):
         r"""Set gradients of the shared parameters to zero.

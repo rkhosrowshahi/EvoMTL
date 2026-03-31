@@ -1,0 +1,57 @@
+# EW – Equal Weighting (baseline)
+# Kendall et al., CVPR 2018
+# Assigns equal weight to all task losses; serves as the standard MTL baseline.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: evomtl-ew+comocma-seed1
+wandb_group: evomtl-ew+comocma
+
+# Architecture
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion_and_mnist
+dataset_path: .               # root of data/ folder (relative to examples/multimnist/)
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 100
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-3
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+# EvoMTL (MOEA after supervised training; COMO-CMA-ES; two tasks only)
+evo_training: true
+evo_moea: comocma
+evo_ps: spherical_lora
+evo_ps_scale: 1.0
+evo_ps_r: 4
+evo_ps_seed: 42
+evo_iterations: 30
+evo_num_kernels: 10
+evo_sigma0: 0.3
+evo_n_eval_batches: 1
+evo_seed: 1
+
+# Paths
+save_path: logs/mnist_and_fashion/evomtl-ew_comocma/adam/seed_1/
+load_path: null
+
+# EW-specific
+# EW has no algorithm-specific hyperparameters.

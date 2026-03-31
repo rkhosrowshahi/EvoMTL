@@ -4,3 +4,7 @@
 *__pycache__/
 *.egg-info/
 *command.txt
+*.ipynb
+archive/
+outsofomore/
+cma_kernels/

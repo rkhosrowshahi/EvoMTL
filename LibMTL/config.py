@@ -1,5 +1,4 @@
 import argparse
-import os
 import numpy as np
 import torch
 
@@ -8,7 +7,6 @@ _parser = argparse.ArgumentParser(description='Configuration for LibMTL')
 _parser.add_argument('--mode', type=str, default='train', help='train, test')
 _parser.add_argument('--seed', type=int, default=0, help='random seed')
 _parser.add_argument('--gpu_id', default='0', type=str, help='gpu_id') 
-_parser.add_argument('--num_workers', default=2, type=int, help='number of workers for dataloader')
 _parser.add_argument('--weighting', type=str, default='EW',
     help='loss weighing strategies, option: EW, UW, GradNorm, GLS, RLW, \
         MGDA, PCGrad, GradVac, CAGrad, GradDrop, DWA, IMTL')
@@ -18,15 +16,29 @@ _parser.add_argument('--rep_grad', action='store_true', default=False,
                     help='computing gradient for representation or sharing parameters')
 _parser.add_argument('--multi_input', action='store_true', default=False, 
                     help='whether each task has its own input data')
-_parser.add_argument('--save_path', type=str, default=None, 
-                    help='save path')
+_parser.add_argument('--save_path', type=str, default=None,
+                    help='save path (checkpoints, best.pt; EvoMTL also writes evo_result.pt / model_evo.pt here)')
 _parser.add_argument('--load_path', type=str, default=None, 
                     help='load ckpt path')
+## Weights & Biases (passed to :class:`LibMTL.trainer.Trainer` as ``wandb_init``)
+_parser.add_argument('--wandb_project', type=str, default=None,
+                    help='wandb project name; logging is disabled when unset')
+_parser.add_argument('--wandb_name', type=str, default=None,
+                    help='wandb run name (optional)')
+_parser.add_argument('--wandb_entity', type=str, default=None,
+                    help='wandb entity (team or username; optional)')
+_parser.add_argument('--wandb_group', type=str, default=None,
+                    help='wandb group name for grouping runs (optional)')
 ## optim
 _parser.add_argument('--optim', type=str, default='adam',
                     help='optimizer for training, option: adam, sgd, adagrad, rmsprop')
 _parser.add_argument('--lr', type=float, default=1e-4, help='learning rate for all types of optim')
 _parser.add_argument('--momentum', type=float, default=0.9, help='momentum for sgd')
+_parser.add_argument('--adam_beta1', type=float, default=0.9, help='Adam: beta1 (first moment decay)')
+_parser.add_argument('--adam_beta2', type=float, default=0.999, help='Adam: beta2 (second moment decay)')
+_parser.add_argument('--adam_eps', type=float, default=1e-8, help='Adam: epsilon for numerical stability')
+_parser.add_argument('--amsgrad', action='store_true', default=False,
+                    help='Adam: use AMSGrad variant')
 _parser.add_argument('--weight_decay', type=float, default=1e-5, help='weight decay for all types of optim')
 ## scheduler
 _parser.add_argument('--scheduler', type=str, #default='step',
@@ -80,6 +92,11 @@ _parser.add_argument('--MoDo_rho', type=float, default=0.1, help=' ')
 ## SDMGrad
 _parser.add_argument('--SDMGrad_lamda', type=float, default=0.3, help=' ')
 _parser.add_argument('--SDMGrad_niter', type=int, default=20, help=' ')
+## UPGrad
+_parser.add_argument('--UPGrad_norm_eps', type=float, default=0.0001,
+                     help='A small value to avoid division by zero when normalizing.')
+_parser.add_argument('--UPGrad_reg_eps', type=float, default=0.0001,
+                     help='A small value to add to the diagonal of the gramian to make it positive definite.')
 
 #### bilevel methods
 _parser.add_argument('--outer_lr', type=float, default=1e-3, help='outer lr')
@@ -87,11 +104,6 @@ _parser.add_argument('--inner_lr', type=float, default=0.1, help='inner lr')
 _parser.add_argument('--inner_step', type=int, default=5, help=' ')
 ## FORUM
 _parser.add_argument('--FORUM_phi', type=float, default=0.1, help=' ') # FORUM
-
-#### evolutionary methods
-_parser.add_argument('--EVO_pop_size', type=int, default=100, help='Population size (NP)')
-_parser.add_argument('--EVO_niter', type=int, default=100, help='Number of iterations')
-_parser.add_argument('--EVO_ws', type=int, default=1024, help='Number of weight sharing')
 
 # args for architecture
 ## CGC
@@ -101,11 +113,44 @@ _parser.add_argument('--num_experts', nargs='+', help='the number of experts for
 _parser.add_argument('--num_nonzeros', type=int, default=2, help='num_nonzeros for DSelect-k')
 _parser.add_argument('--kgamma', type=float, default=1.0, help='gamma for DSelect-k')
 
+# EvoMTL (MOEA on parameter sharing; use :class:`LibMTL.evomtl.evo_trainer.EvoMTLTrainer`)
+_parser.add_argument('--evo_training', action='store_true', default=False,
+                    help='after normal GD (epochs), run MOEA on parameter-sharing latent z')
+_parser.add_argument('--evo_ps', type=str, default='spherical_lora',
+                    help='random_proj, flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora')
+_parser.add_argument('--evo_moea', type=str, default='nsga2',
+                    help='nsga2 or comocma (two tasks only for comocma)')
+_parser.add_argument('--evo_ps_scale', type=float, default=1.0,
+                    help='scale for theta = theta_0 + ps_scale * ps(z)')
+_parser.add_argument('--evo_ps_r', type=int, default=4,
+                    help='rank r for LoRA-style parameter sharing (ignored for random_proj)')
+_parser.add_argument('--evo_ps_k', type=int, default=64,
+                    help='latent dimension k for random_proj only')
+_parser.add_argument('--evo_ps_seed', type=int, default=42, help='seed for parameter sharing')
+_parser.add_argument('--evo_iterations', type=int, default=30,
+                    help='MOEA outer iterations: NSGA-II generations or COMO-CMA-ES iterations')
+_parser.add_argument('--evo_pop_size', type=int, default=24, help='NSGA-II population size')
+_parser.add_argument('--evo_z_lower', type=float, default=-3.0, help='NSGA-II box lower for z')
+_parser.add_argument('--evo_z_upper', type=float, default=3.0, help='NSGA-II box upper for z')
+_parser.add_argument('--evo_n_eval_batches', type=int, default=1,
+                    help='train batches per MOEA fitness evaluation')
+_parser.add_argument('--evo_seed', type=int, default=0, help='NSGA-II random seed')
+_parser.add_argument('--evo_num_kernels', type=int, default=10,
+                    help='number of comocma kernels / Pareto points')
+_parser.add_argument('--evo_sigma0', type=float, default=0.3, help='initial CMA step size')
+
 LibMTL_args = _parser
 
 
 def prepare_args(params):
     r"""Return the configuration of hyperparameters, optimizier, and learning rate scheduler.
+
+    The returned ``kwargs`` includes ``evo_args`` (from ``--evo_*`` flags) for
+    :class:`LibMTL.evomtl.evo_trainer.EvoMTLTrainer` when ``--evo_training`` is set,
+    and ``wandb_init`` (from ``--wandb_project`` / ``--wandb_name`` / ``--wandb_entity``) for
+    :class:`LibMTL.trainer.Trainer` when ``--wandb_project`` is set.  ``wandb_init`` includes a
+    ``config`` dict (LibMTL argparse fields plus ``weight_args``, ``arch_args``, ``optim_param``,
+    ``scheduler_param``, ``evo_args``) passed to :func:`wandb.init`.
 
     Args:
         params (argparse.Namespace): The command-line arguments.
@@ -114,7 +159,7 @@ def prepare_args(params):
     if params.weighting in ['EW', 'UW', 'GradNorm', 'GLS', 'RLW', 'MGDA', 'IMTL',
                             'PCGrad', 'GradVac', 'CAGrad', 'GradDrop', 'DWA', 
                             'Nash_MTL', 'MoCo', 'Aligned_MTL', 'DB_MTL', 'STCH', 
-                            'ExcessMTL', 'FairGrad', 'FAMO', 'MoDo', 'SDMGrad']:
+                            'ExcessMTL', 'FairGrad', 'FAMO', 'MoDo', 'SDMGrad', 'UPGrad']:
         if params.weighting in ['DWA']:
             if params.T is not None:
                 kwargs['weight_args']['T'] = params.T
@@ -182,6 +227,9 @@ def prepare_args(params):
         elif params.weighting in ['SDMGrad']:
             kwargs['weight_args']['SDMGrad_lamda'] = params.SDMGrad_lamda
             kwargs['weight_args']['SDMGrad_niter'] = params.SDMGrad_niter
+        elif params.weighting in ['UPGrad']:
+            kwargs['weight_args']['UPGrad_norm_eps'] = params.UPGrad_norm_eps
+            kwargs['weight_args']['UPGrad_reg_eps'] = params.UPGrad_reg_eps
     elif params.weighting in ['MOML', 'FORUM', 'AutoLambda']:
         kwargs['weight_args']['outer_lr'] = params.outer_lr
         kwargs['weight_args']['inner_step'] = params.inner_step
@@ -190,11 +238,6 @@ def prepare_args(params):
             kwargs['weight_args']['inner_lr'] = params.inner_lr
         elif params.weighting in ['MOML']:
             kwargs['weight_args']['inner_lr'] = params.inner_lr
-    elif params.weighting in ['EVO']:
-        kwargs['weight_args']['EVO_pop_size'] = params.EVO_pop_size
-        kwargs['weight_args']['EVO_niter'] = params.EVO_niter
-        kwargs['weight_args']['EVO_ws'] = params.EVO_ws
-        # print(kwargs['weight_args']['EVO_pop_size'])
     else:
         raise ValueError('No support weighting method {}'.format(params.weighting)) 
         
@@ -210,7 +253,14 @@ def prepare_args(params):
         
     if params.optim in ['adam', 'sgd', 'adagrad', 'rmsprop']:
         if params.optim == 'adam':
-            optim_param = {'optim': 'adam', 'lr': params.lr, 'weight_decay': params.weight_decay}
+            optim_param = {
+                'optim': 'adam',
+                'lr': params.lr,
+                'weight_decay': params.weight_decay,
+                'betas': (params.adam_beta1, params.adam_beta2),
+                'eps': params.adam_eps,
+                'amsgrad': params.amsgrad,
+            }
         elif params.optim == 'sgd':
             optim_param = {'optim': 'sgd', 'lr': params.lr, 
                            'weight_decay': params.weight_decay, 'momentum': params.momentum}
@@ -218,19 +268,118 @@ def prepare_args(params):
         raise ValueError('No support optim method {}'.format(params.optim))
         
     if params.scheduler is not None:
-        if params.scheduler in ['step', 'cos', 'exp', 'reduce']:
+        if params.scheduler in ['step', 'cos', 'exp']:
             if params.scheduler == 'step':
                 scheduler_param = {'scheduler': 'step', 'step_size': params.step_size, 'gamma': params.gamma}
-            elif params.scheduler == 'reduce':
-                scheduler_param = {'scheduler': 'reduce', 'mode': 'max', 'factor': 0.7, 'patience': 5, 'min_lr': 0.00001}
         else:
             raise ValueError('No support scheduler method {}'.format(params.scheduler))
     else:
         scheduler_param = None
     
+    kwargs['evo_args'] = _make_evo_args(params)
+    kwargs['wandb_init'] = _make_wandb_init(params, kwargs, optim_param, scheduler_param)
+
     _display(params, kwargs, optim_param, scheduler_param)
     
     return kwargs, optim_param, scheduler_param
+
+
+def _wandb_sanitize(x):
+    """Convert values to forms safe for ``wandb.init(config=...)`` (JSON-serializable)."""
+    if x is None or isinstance(x, (bool, int, float, str)):
+        return x
+    if isinstance(x, (tuple, list)):
+        return [_wandb_sanitize(i) for i in x]
+    if isinstance(x, dict):
+        return {str(k): _wandb_sanitize(v) for k, v in x.items()}
+    if isinstance(x, np.generic):
+        return x.item()
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return str(x)
+
+
+def _build_wandb_config(params, kwargs, optim_param, scheduler_param):
+    """Hyperparameters snapshot for Weights & Biases (matches :func:`prepare_args` outputs)."""
+    libmtl_args = {k: _wandb_sanitize(v) for k, v in sorted(vars(params).items())}
+    return {
+        'libmtl_args': libmtl_args,
+        'weight_args': _wandb_sanitize(kwargs.get('weight_args', {})),
+        'arch_args': _wandb_sanitize(kwargs.get('arch_args', {})),
+        'optim_param': _wandb_sanitize(optim_param),
+        'scheduler_param': _wandb_sanitize(
+            scheduler_param if scheduler_param is not None else {}
+        ),
+        'evo_args': _wandb_sanitize(kwargs.get('evo_args', {})),
+    }
+
+
+def _make_wandb_init(params, kwargs, optim_param, scheduler_param):
+    """Build ``wandb_init`` for :meth:`LibMTL.trainer.Trainer` from CLI args."""
+    project = getattr(params, 'wandb_project', None)
+    if not project:
+        return None
+    out = {
+        'project': project,
+        'config': _build_wandb_config(params, kwargs, optim_param, scheduler_param),
+    }
+    name = getattr(params, 'wandb_name', None)
+    if name:
+        out['name'] = name
+    entity = getattr(params, 'wandb_entity', None)
+    if entity:
+        out['entity'] = entity
+    group = getattr(params, 'wandb_group', None)
+    if group:
+        out['group'] = group
+    return out
+
+
+def _make_evo_args(params):
+    """Build ``evo_args`` for :meth:`LibMTL.trainer.Trainer.train` (no ``**kwargs``)."""
+    if not getattr(params, 'evo_training', False):
+        return {'evo_training': False}
+
+    moea = params.evo_moea.strip().lower()
+    ps_key = params.evo_ps.strip().lower().replace('-', '_')
+
+    ps_kwargs = {'seed': params.evo_ps_seed}
+    if ps_key == 'random_proj':
+        ps_kwargs['k'] = params.evo_ps_k
+    else:
+        ps_kwargs['r'] = params.evo_ps_r
+
+    if moea == 'nsga2':
+        evo_kwargs = {
+            'n_gen': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'z_lower': params.evo_z_lower,
+            'z_upper': params.evo_z_upper,
+            'n_eval_batches': params.evo_n_eval_batches,
+            'seed': params.evo_seed,
+        }
+    elif moea in ('comocma', 'mocma', 'mo-cma-es'):
+        evo_kwargs = {
+            'n_iterations': params.evo_iterations,
+            'num_kernels': params.evo_num_kernels,
+            'sigma0': params.evo_sigma0,
+            'n_eval_batches': params.evo_n_eval_batches,
+        }
+    else:
+        raise ValueError('Unsupported evo_moea {}'.format(params.evo_moea))
+
+    return {
+        'evo_training': True,
+        'evo_ps': params.evo_ps,
+        'moea': params.evo_moea,
+        'ps_scale': params.evo_ps_scale,
+        'ps_kwargs': ps_kwargs,
+        'evo_kwargs': evo_kwargs,
+    }
+
 
 def _display(params, kwargs, optim_param, scheduler_param):
     print('='*40)
@@ -244,6 +393,15 @@ def _display(params, kwargs, optim_param, scheduler_param):
     print('\tSave Path:', params.save_path)
     print('\tLoad Path:', params.load_path)
     print('\tDevice: {}'.format('cuda:'+params.gpu_id if torch.cuda.is_available() else 'cpu'))
+    wi = kwargs.get('wandb_init')
+    if wi is not None:
+        print('\tW&B project:', wi.get('project'))
+        if wi.get('entity'):
+            print('\tW&B entity:', wi['entity'])
+        if wi.get('name'):
+            print('\tW&B run name:', wi['name'])
+        if wi.get('group'):
+            print('\tW&B group:', wi['group'])
     for wa, p in zip(['weight_args', 'arch_args'], [params.weighting, params.arch]):
         if kwargs[wa] != {}:
             print('{} Configuration:'.format(p))
@@ -256,17 +414,14 @@ def _display(params, kwargs, optim_param, scheduler_param):
         print('Scheduler Configuration:')
         for k, v in scheduler_param.items():
             print('\t'+k+':', v)
-    if params.save_path is not None:
-        if os.path.exists(params.save_path):
-            print('Save path already exists, please check if you want to restart.')
-        else:
-            os.makedirs(params.save_path, exist_ok=True)
-            os.makedirs(os.path.join(params.save_path, 'train'), exist_ok=True)
-            os.makedirs(os.path.join(params.save_path, 'val'), exist_ok=True)
-            print('Save path created: {}'.format(params.save_path))
-
-    if params.load_path is not None:
-        if os.path.exists(params.load_path):
-            print('Load path exists: {}'.format(params.load_path))
-        else:
-            raise ValueError('Load path does not exist: {}, please check!'.format(params.load_path))
+    evo = kwargs.get('evo_args') or {}
+    if evo.get('evo_training'):
+        print('EvoMTL Configuration:')
+        for k in ('evo_ps', 'moea', 'ps_scale'):
+            if k in evo:
+                print('\t'+k+':', evo[k])
+        print('\t(save_path for GD + EvoMTL):', params.save_path)
+        if evo.get('ps_kwargs'):
+            print('\tps_kwargs:', evo['ps_kwargs'])
+        if evo.get('evo_kwargs'):
+            print('\tevo_kwargs:', evo['evo_kwargs'])
