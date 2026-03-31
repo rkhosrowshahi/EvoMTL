@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 
-class RandomProjectionParameterSharing:
+class RandomProjection:
     """Random projection from k-dimensional latent space to full parameter space.
 
     The latent vector has length ``k + 1``: the first ``k`` components map through
@@ -62,7 +62,7 @@ class RandomProjectionParameterSharing:
         return self.process(x)
 
 
-class LayerwiseRandomProjectionParameterSharing:
+class LayerwiseRandomProjection:
     """Layer-wise random projection with direct bias evolution.
 
     Each non-bias parameter tensor gets its own projection matrix
@@ -182,7 +182,143 @@ class LayerwiseRandomProjectionParameterSharing:
         return self.process(x)
 
 
-class LayerwiseScaledRandomProjectionParameterSharing:
+class LayerwiseRandomBlocking:
+    """Layer-wise random blocking: k latent scalars per weight tensor.
+
+    Each non-bias parameter tensor (flattened to length ``n_l``) is partitioned
+    into ``k`` blocks by randomly assigning every weight index to one of ``k``
+    subspace indices via a random assignment array ``assignment`` of length ``n_l``::
+
+        delta[i] = z_l[assignment[i]]     for i in 0 … n_l-1
+
+    All weights assigned to block ``j`` share the value ``z_l[j]``.
+
+    If ``n_l < k``, that tensor is evolved **directly** (like bias): ``z_l`` has
+    length ``n_l`` and ``delta = z_l``.
+
+    Biases are always direct. Total latent dimension is
+    ``sum_l min(k, n_l) + sum(bias_sizes)`` over weight tensors ``l`` and biases.
+    """
+
+    def __init__(self, model, k, device="cuda", seed=42):
+        self.model = model
+        self.base_params = torch.nn.utils.parameters_to_vector(self.model.parameters())
+        self.N = len(self.base_params)
+        self.k = k
+        self.device = device
+
+        rng = np.random.default_rng(seed)
+        torch.manual_seed(seed)
+
+        self.layer_info = []
+        self.param_shapes = []
+        self.param_sizes = []
+        total_dims = 0
+        n_blocking_layers = 0
+        n_bias_dims = 0
+        n_direct_weight_dims = 0
+
+        for name, param in self.model.named_parameters():
+            shape = param.shape
+            size = int(np.prod(shape))
+            self.param_shapes.append(shape)
+            self.param_sizes.append(size)
+
+            if name.endswith(".bias"):
+                dims = size
+                self.layer_info.append(
+                    {
+                        "type": "direct",
+                        "name": name,
+                        "n": size,
+                        "dims": dims,
+                        "offset": total_dims,
+                        "size": size,
+                    }
+                )
+                total_dims += dims
+                n_bias_dims += dims
+            else:
+                if self.k > size:
+                    self.layer_info.append(
+                        {
+                            "type": "direct",
+                            "name": name,
+                            "n": size,
+                            "dims": size,
+                            "offset": total_dims,
+                            "size": size,
+                        }
+                    )
+                    total_dims += size
+                    n_direct_weight_dims += size
+                else:
+                    base = np.tile(np.arange(self.k), np.ceil(size / self.k).astype(int))[:size]
+                    assignment = rng.permutation(base).astype(np.int64)
+                    self.layer_info.append(
+                        {
+                            "type": "rand_blocking",
+                            "name": name,
+                            "dims": self.k,
+                            "offset": total_dims,
+                            "size": size,
+                            "assignment": assignment,
+                        }
+                    )
+                    total_dims += self.k
+                    n_blocking_layers += 1
+
+        self.num_dims = total_dims
+        self.z0 = self._init_z0()
+
+        print(
+            f"LayerwiseRandomBlocking: blocking_layers={n_blocking_layers}, k={self.k}, "
+            f"bias_dims={n_bias_dims}, direct_weight_dims={n_direct_weight_dims} | "
+            f"z dim = {self.num_dims} | model params = {self.N}"
+        )
+
+    def _init_z0(self):
+        return np.zeros(self.num_dims)
+
+    def expand(self, z):
+        """Expand latent vector to full parameter-space delta via random index ties."""
+        if not isinstance(z, np.ndarray):
+            z = np.asarray(z, dtype=np.float64)
+
+        reconstructed = []
+        for info in self.layer_info:
+            offset = info["offset"]
+            dims = info["dims"]
+            z_layer = z[offset : offset + dims]
+
+            if info["type"] == "rand_blocking":
+                reconstructed.append(z_layer[info["assignment"]])
+            else:
+                reconstructed.append(z_layer.copy())
+
+        return np.concatenate(reconstructed)
+
+    def process(self, x, alpha=1.0):
+        """Convert expanded parameters to model-compatible form."""
+        if not isinstance(x, torch.Tensor):
+            x = torch.Tensor(x).to(self.device).float()
+        x = x.to(self.device)
+        return alpha * x
+
+    def load_parameters_to_model(self, parameters):
+        """Set model weights from a flat array."""
+        if not isinstance(parameters, torch.Tensor):
+            parameters = torch.from_numpy(parameters).to(self.device).float()
+        parameters = parameters.to(self.device)
+        torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
+
+    def forward(self, z):
+        """Full forward: z -> expand -> process -> theta."""
+        x = self.expand(z)
+        return self.process(x)
+
+
+class LayerwiseScaledRandomProjection:
     """Layer-wise random projection with per-layer alpha and direct biases.
 
     Each non-bias tensor ``l`` has a projection matrix ``P_l in R^{n_l x k}`` and
@@ -314,7 +450,7 @@ class LayerwiseScaledRandomProjectionParameterSharing:
 
 
 
-class FlattenLoRAParameterSharing:
+class FlattenLoRA:
     """LoRA-style low-rank decomposition over flattened model parameters."""
 
     def __init__(self, model, r, device="cuda", seed=42):
@@ -453,7 +589,7 @@ class FlattenLoRAParameterSharing:
         return self.process(x)
 
 
-class DictLoRAParameterSharing:
+class DictLoRA:
     """
     Dictionary-based LoRA for ConvNets.
     For Conv2d: ΔW[o,i,:,:] = Σ_m A[o,m]·B[i,m]·D[m,:,:]

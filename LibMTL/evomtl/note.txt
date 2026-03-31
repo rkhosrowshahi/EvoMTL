@@ -1,6 +1,6 @@
 Set-Location c:\Users\rasar\Documents\Projects\EvoMTL; python -c "
 import torch.nn as nn, numpy as np
-from LibMTL.evomtl.parameter_sharing import LayerwiseRandomProjectionParameterSharing
+from LibMTL.evomtl.parameter_sharing import LayerwiseRandomProjection
 
 class MultiLeNetEncoder(nn.Module):
     def __init__(self):
@@ -33,7 +33,7 @@ print()
 print('%-6s  %-8s  %-22s  %-26s  %-8s' % ('k', 'z_enc', 'z_dec_L / z_dec_R', 'z_biases(direct)', 'z_total'))
 print('-' * 80)
 for k in [16, 64, 128, 256, 512, 1024]:
-    ps = LayerwiseRandomProjectionParameterSharing(m, k=k, device='cpu', seed=42)
+    ps = LayerwiseRandomProjection(m, k=k, device='cpu', seed=42)
     enc_k = sum(i['k'] for i in ps.layer_info if i['section']=='encoder' and i['type']=='proj')
     dL_k  = sum(i['k'] for i in ps.layer_info if i['section']=='decoder_L' and i['type']=='proj')
     dR_k  = sum(i['k'] for i in ps.layer_info if i['section']=='decoder_R' and i['type']=='proj')

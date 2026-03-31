@@ -1,9 +1,10 @@
 from .parameter_sharing import (
-    RandomProjectionParameterSharing,
-    LayerwiseRandomProjectionParameterSharing,
-    LayerwiseScaledRandomProjectionParameterSharing,
-    FlattenLoRAParameterSharing,
-    DictLoRAParameterSharing,
+    RandomProjection,
+    LayerwiseRandomBlocking,
+    LayerwiseRandomProjection,
+    LayerwiseScaledRandomProjection,
+    FlattenLoRA,
+    DictLoRA,
     LinearOnlyLoRA,
     ModulationLoRA,
     SpectralAllSVD,
@@ -20,11 +21,12 @@ def __getattr__(name):
 
 
 __all__ = [
-    "RandomProjectionParameterSharing",
-    "LayerwiseRandomProjectionParameterSharing",
-    "LayerwiseScaledRandomProjectionParameterSharing",
-    "FlattenLoRAParameterSharing",
-    "DictLoRAParameterSharing",
+    "RandomProjection",
+    "LayerwiseRandomBlocking",
+    "LayerwiseRandomProjection",
+    "LayerwiseScaledRandomProjection",
+    "FlattenLoRA",
+    "DictLoRA",
     "LinearOnlyLoRA",
     "ModulationLoRA",
     "SpectralAllSVD",

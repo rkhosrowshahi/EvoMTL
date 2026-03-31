@@ -425,7 +425,12 @@ def _make_evo_args(params):
     ps_key = params.evo_ps.strip().lower().replace('-', '_')
 
     ps_kwargs = {'seed': params.evo_ps_seed}
-    if ps_key in ('random_proj', 'layerwise_random_proj'):
+    if ps_key in (
+        'random_proj',
+        'layerwise_random_proj',
+        'layerwise_random_blocking',
+        'layerwise_scaled_random_proj',
+    ):
         ps_kwargs['k'] = params.evo_ps_k
     else:
         ps_kwargs['r'] = params.evo_ps_r

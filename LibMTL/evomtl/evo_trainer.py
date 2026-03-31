@@ -26,24 +26,26 @@ import torch.nn as nn
 
 from ..trainer import Trainer
 from .parameter_sharing import (
-    DictLoRAParameterSharing,
-    FlattenLoRAParameterSharing,
-    LayerwiseRandomProjectionParameterSharing,
-    LayerwiseScaledRandomProjectionParameterSharing,
+    DictLoRA,
+    FlattenLoRA,
+    LayerwiseRandomBlocking,
+    LayerwiseRandomProjection,
+    LayerwiseScaledRandomProjection,
     LinearOnlyLoRA,
     ModulationLoRA,
-    RandomProjectionParameterSharing,
+    RandomProjection,
     SpectralAllSVD,
     SpectralLoRA,
 )
 
 EVO_PS_REGISTRY = {
-    "random_proj": RandomProjectionParameterSharing,
-    "layerwise_random_proj": LayerwiseRandomProjectionParameterSharing,
-    "layerwise_scaled_random_proj": LayerwiseScaledRandomProjectionParameterSharing,
-    "flatten_lora": FlattenLoRAParameterSharing,
-    "spherical_lora": FlattenLoRAParameterSharing,
-    "dict_lora": DictLoRAParameterSharing,
+    "random_proj": RandomProjection,
+    "layerwise_random_proj": LayerwiseRandomProjection,
+    "layerwise_random_blocking": LayerwiseRandomBlocking,
+    "layerwise_scaled_random_proj": LayerwiseScaledRandomProjection,
+    "flatten_lora": FlattenLoRA,
+    "spherical_lora": FlattenLoRA,
+    "dict_lora": DictLoRA,
     "linear_lora": LinearOnlyLoRA,
     "modulation_lora": ModulationLoRA,
     "spectral_lora": SpectralLoRA,
@@ -228,7 +230,7 @@ class EvoMTLTrainer(Trainer):
       class raises if ``task_num != 2`` for :meth:`run_comocma`.
     * ``SpectralLoRA`` uses SVD modulation on conv weights and LoRA on linear
       weights; ``SpectralAllSVD`` uses SVD on both conv and linear 2D weights.
-      There is no separate ``SphericalLoRA`` class — use ``FlattenLoRAParameterSharing``
+      There is no separate ``SphericalLoRA`` class — use ``FlattenLoRA``
       (``spherical_lora``) or another strategy from ``LibMTL.evomtl.parameter_sharing``.
     """
 
