@@ -1,3 +1,4 @@
+import random
 import torch, os, copy, torch_geometric
 import torch.nn as nn
 import torch.nn.functional as F
@@ -104,13 +105,15 @@ class Trainer(nn.Module):
 
         self._prepare_model(weighting, architecture, encoder_class, decoders)
         self._prepare_optimizer(optim_param, scheduler_param)
-        
+
+        # W&B before the meter so ``wandb.init()`` output appears before LOG FORMAT
+        # (``_PerformanceMeter`` prints that header in ``__init__``).
+        self._setup_wandb(wandb_init)
+
         self.meter = _PerformanceMeter(self.task_dict, self.multi_input)
 
         if self.weighting in self.bilevel_methods:
             self._prepare_tw(self.kwargs['weight_args']['outer_lr'])
-
-        self._setup_wandb(wandb_init)
 
     def _setup_wandb(self, wandb_init: Optional[Dict[str, Any]]) -> None:
         if wandb_init is None:
@@ -453,7 +456,8 @@ class Trainer(nn.Module):
 
 
     def test(self, test_dataloaders, epoch=None, mode='test', return_improvement=False,
-             wandb_log_step=None):
+             wandb_log_step=None, *, max_batches=None, random_minibatch=False,
+             display_tag=None, suppress_display=False, return_metrics=False):
         r'''The test process of multi-task learning.
 
         Args:
@@ -462,31 +466,78 @@ class Trainer(nn.Module):
                             dataloader which returns data and a dictionary of name-label pairs in each iteration.
             epoch (int, default=None): The current epoch. 
             wandb_log_step (int, optional): Required for wandb when ``epoch`` is ``None`` (step passed to ``wandb.log``).
+            max_batches (int, optional): If set, evaluate at most this many batches from the start \
+                of each task's loader (ignored when ``random_minibatch`` is ``True``).
+            random_minibatch (bool): If ``True``, evaluate a single randomly chosen minibatch \
+                (one per task when ``multi_input`` is ``True``).
+            display_tag (str, optional): If set, appended to the printed mode label, e.g. \
+                ``TRAIN (Pareto center, random minibatch):``.
+            suppress_display (bool): If ``True``, skip :meth:`_PerformanceMeter.display` (e.g. for a \
+                compact combined line printed elsewhere).
+            return_metrics (bool): If ``True``, return a snapshot dict with ``loss_item``, ``results``, \
+                ``elapsed`` (mutually exclusive with ``return_improvement``).
         '''
+        if return_improvement and return_metrics:
+            raise ValueError("return_improvement and return_metrics cannot both be True.")
         test_loader, test_batch = self._prepare_dataloaders(test_dataloaders)
         
         self.model.eval()
         self.meter.record_time('begin')
         with torch.no_grad():
             if not self.multi_input:
-                for batch_index in range(test_batch):
+                if random_minibatch:
+                    k = random.randint(0, test_batch - 1)
+                    for _ in range(k):
+                        next(test_loader[1])
+                    n_iter = 1
+                elif max_batches is not None:
+                    n_iter = min(test_batch, max_batches)
+                else:
+                    n_iter = test_batch
+                for batch_index in range(n_iter):
                     test_inputs, test_gts = self._process_data(test_loader)
                     test_preds = self.model(test_inputs)
                     test_preds = self.process_preds(test_preds)
                     test_losses = self._compute_loss(test_preds, test_gts)
                     self.meter.update(test_preds, test_gts)
             else:
-                for tn, task in enumerate(self.task_name):
-                    for batch_index in range(test_batch[tn]):
+                if random_minibatch:
+                    for tn, task in enumerate(self.task_name):
+                        k = random.randint(0, test_batch[tn] - 1)
+                        for _ in range(k):
+                            next(test_loader[task][1])
+                    for tn, task in enumerate(self.task_name):
                         test_input, test_gt = self._process_data(test_loader[task])
                         test_pred = self.model(test_input, task)
                         test_pred = test_pred[task]
                         test_pred = self.process_preds(test_pred)
                         test_loss = self._compute_loss(test_pred, test_gt, task)
                         self.meter.update(test_pred, test_gt, task)
+                else:
+                    for tn, task in enumerate(self.task_name):
+                        n_iter = test_batch[tn]
+                        if max_batches is not None:
+                            n_iter = min(test_batch[tn], max_batches)
+                        for batch_index in range(n_iter):
+                            test_input, test_gt = self._process_data(test_loader[task])
+                            test_pred = self.model(test_input, task)
+                            test_pred = test_pred[task]
+                            test_pred = self.process_preds(test_pred)
+                            test_loss = self._compute_loss(test_pred, test_gt, task)
+                            self.meter.update(test_pred, test_gt, task)
         self.meter.record_time('end')
         self.meter.get_score()
-        self.meter.display(epoch=epoch, mode=mode)
+        metrics = None
+        if return_metrics:
+            metrics = {
+                "loss_item": np.copy(self.meter.loss_item),
+                "results": {
+                    task: tuple(self.meter.results[task]) for task in self.task_name
+                },
+                "elapsed": float(self.meter.end_time - self.meter.beg_time),
+            }
+        if not suppress_display:
+            self.meter.display(epoch=epoch, mode=mode, display_tag=display_tag)
         if self._wandb_enabled:
             if epoch is not None:
                 wb_step = int(epoch)
@@ -503,6 +554,35 @@ class Trainer(nn.Module):
         self.meter.reinit()
         if return_improvement:
             return improvement
+        if return_metrics:
+            return metrics
+        return None
+
+    def _print_metrics_snapshot(self, snap: Dict[str, Any]) -> None:
+        """Print one segment of loss + per-task metrics (same layout as :meth:`_PerformanceMeter.display`)."""
+        for tn, task in enumerate(self.task_name):
+            print("{:.4f} ".format(snap["loss_item"][tn]), end="")
+            for i in range(len(snap["results"][task])):
+                print("{:.4f} ".format(snap["results"][task][i]), end="")
+            print("| ", end="")
+
+    def print_compact_train_test_line(
+        self,
+        train_snap: Dict[str, Any],
+        test_snap: Dict[str, Any],
+        epoch_label: Optional[int] = None,
+        train_label_prefix: str = "TRAIN",
+        test_label_prefix: str = "TEST",
+    ) -> None:
+        """One stdout line: ``Epoch: #### | TRAIN: ... | Time: ... | TEST: ... | Time: ...`` (GD style)."""
+        if epoch_label is not None:
+            print("Epoch: {:04d} | ".format(int(epoch_label)), end="")
+        print("{}: ".format(train_label_prefix), end="")
+        self._print_metrics_snapshot(train_snap)
+        print("Time: {:.4f}".format(train_snap["elapsed"]), end=" | ")
+        print("{}: ".format(test_label_prefix), end="")
+        self._print_metrics_snapshot(test_snap)
+        print("Time: {:.4f}".format(test_snap["elapsed"]))
 
 
     ### for bilevel methods

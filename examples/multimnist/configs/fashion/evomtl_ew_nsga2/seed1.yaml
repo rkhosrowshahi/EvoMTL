@@ -25,7 +25,7 @@ dataset_path: .               # root of data/ folder (relative to examples/multi
 num_tasks: 2
 train_bs: 256
 test_bs: 10000
-epochs: 100
+epochs: 6
 
 # Optimizer (Adam)
 optim: adam

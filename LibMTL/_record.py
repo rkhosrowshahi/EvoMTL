@@ -60,7 +60,7 @@ class _PerformanceMeter(object):
             print('| ', end='')
         print('TIME')
     
-    def display(self, mode, epoch):
+    def display(self, mode, epoch, display_tag=None):
         if epoch is not None:
             if epoch == 0 and self.base_result is None and mode==('val' if self.has_val else 'test'):
                 self.base_result = self.results
@@ -76,6 +76,8 @@ class _PerformanceMeter(object):
             p_mode = 'VAL'
         else:
             p_mode = 'TEST'
+        if display_tag:
+            p_mode = f'{p_mode} ({display_tag})'
         print('{}: '.format(p_mode), end='')
         for tn, task in enumerate(self.task_name):
             print('{:.4f} '.format(self.loss_item[tn]), end='')

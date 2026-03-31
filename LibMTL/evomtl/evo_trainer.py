@@ -6,7 +6,8 @@ Workflow:
    ``theta = theta_0 + ps_scale * ps(z)`` (same convention as in ``parameter_sharing``).
 3. Run NSGA-II (pymoo) or COMO-CMA-ES / MO-CMA-ES (comocma) with an ask-and-tell loop.
 4. Form a *Pareto-center* latent vector by averaging Pareto-set points weighted by
-   marginal hypervolume contribution, apply it, then run test / save.
+   marginal hypervolume contribution, apply it, then evaluate train and test (same
+   path as :meth:`Trainer.test`) and save.
 
 References:
 - pymoo ask-and-tell: https://www.pymoo.org/algorithms/usage.html#nb-algorithms-ask-and-tell
@@ -16,6 +17,7 @@ References:
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import numpy as np
@@ -209,14 +211,61 @@ class EvoMTLTrainer(Trainer):
             raise RuntimeError("No base snapshot; run capture_base_parameters() first.")
         nn.utils.vector_to_parameters(self.theta_0, self.model.parameters())
 
+    def _sample_eval_batches(
+        self,
+        train_dataloaders: Any,
+        n_batches: int,
+    ) -> List[Tuple[Any, Any]]:
+        """Sample ``n_batches`` mini-batches once; return as a list of ``(inp, gts)`` pairs.
+
+        For ``multi_input=True``, each element is ``({task: inp}, {task: gts})``.
+        These are meant to be passed to :meth:`evaluate_multiobjective_losses` so
+        that all solutions in one iteration share the exact same data.
+        """
+        train_loader, train_batch = self._prepare_dataloaders(train_dataloaders)
+        n_batches = int(max(1, n_batches))
+        batches: List[Tuple[Any, Any]] = []
+
+        if not self.multi_input:
+            n = min(n_batches, train_batch)
+            for _ in range(n):
+                inp, gts = self._process_data(train_loader)
+                batches.append((inp, gts))
+        else:
+            n = min(n_batches, min(train_batch))
+            for _ in range(n):
+                task_inputs: Dict[str, Any] = {}
+                task_gts: Dict[str, Any] = {}
+                for task in self.task_name:
+                    task_inputs[task], task_gts[task] = self._process_data(
+                        train_loader[task]
+                    )
+                batches.append((task_inputs, task_gts))
+        return batches
+
     @torch.no_grad()
     def evaluate_multiobjective_losses(
         self,
         train_dataloaders: Any,
         n_batches: int = 5,
+        prefetched_batches: Optional[List[Tuple[Any, Any]]] = None,
     ) -> np.ndarray:
-        """Mean per-task training loss over up to ``n_batches`` mini-batches."""
+        """Mean per-task training loss over up to ``n_batches`` mini-batches.
+
+        If ``prefetched_batches`` is provided (a list returned by
+        :meth:`_sample_eval_batches`), those exact batches are reused instead of
+        drawing new ones.  Pass pre-fetched batches so that all solutions in a
+        single MOEA iteration are evaluated on the **same** mini-batch.
+        """
         self.model.eval()
+
+        if prefetched_batches is not None:
+            acc = torch.zeros(self.task_num, device=self.device)
+            for inp, gts in prefetched_batches:
+                losses = self.forward4loss(self.model, inp, gts)
+                acc += losses.detach()
+            return (acc / len(prefetched_batches)).cpu().numpy()
+
         train_loader, train_batch = self._prepare_dataloaders(train_dataloaders)
         n_batches = int(max(1, n_batches))
 
@@ -274,6 +323,7 @@ class EvoMTLTrainer(Trainer):
         nadir = np.max(F_pf, axis=0) if len(F_pf) else np.max(F, axis=0)
         log: Dict[str, Any] = {
             "evo/iterations": int(iterations),
+            "evo/pareto_front_size": float(len(F_pf)),
         }
         for ti, tn in enumerate(self.task_name):
             log[f"evo/{tn}/mean"] = float(np.mean(F[:, ti]))
@@ -282,6 +332,38 @@ class EvoMTLTrainer(Trainer):
         if extras:
             log.update(extras)
         self._wandb_log(log, step=step)
+
+    def _print_evo_progress(
+        self,
+        phase: str,
+        step: int,
+        n_steps: int,
+        F: np.ndarray,
+        extras: Optional[str] = None,
+        elapsed: Optional[float] = None,
+        pareto_front_size: Optional[int] = None,
+    ) -> None:
+        """Print one MOEA step to stdout (mirrors :meth:`_wandb_log_evo_front_metrics`)."""
+        F = np.atleast_2d(np.asarray(F, dtype=np.float64))
+        if pareto_front_size is None:
+            pareto_front_size = len(pareto_front_indices(F))
+        parts = []
+        for ti, tn in enumerate(self.task_name):
+            col = F[:, ti]
+            parts.append(
+                f"{tn} mean={float(np.mean(col)):.4f} "
+                f"min={float(np.min(col)):.4f} max={float(np.max(col)):.4f}"
+            )
+        line = (
+            f"[EvoMTL] {phase} {step + 1:04d}/{int(n_steps):04d} | "
+            + " | ".join(parts)
+            + f" | pareto_front={pareto_front_size}"
+        )
+        if extras:
+            line += f" | {extras}"
+        if elapsed is not None:
+            line += f" | Time: {elapsed:.4f}"
+        print(line, flush=True)
 
     def run_nsga2(
         self,
@@ -294,6 +376,7 @@ class EvoMTLTrainer(Trainer):
         seed: int = 0,
         hv_ref_point: Optional[np.ndarray] = None,
         wandb_step_offset: int = 0,
+        test_dataloaders: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """NSGA-II (pymoo) with ask-and-tell on latent vectors ``z``."""
         if self.ps is None:
@@ -317,15 +400,18 @@ class EvoMTLTrainer(Trainer):
 
         history_F: List[np.ndarray] = []
 
-        for gen_idx in range(int(n_gen)):
+        n_gen = int(n_gen)
+        for gen_idx in range(n_gen):
+            t0 = time.perf_counter()
             pop = algorithm.ask()
             X = pop.get("X")
+            shared_batches = self._sample_eval_batches(train_dataloaders, n_eval_batches)
             F_list = []
             for i in range(len(X)):
                 self.apply_z(X[i])
                 F_list.append(
                     self.evaluate_multiobjective_losses(
-                        train_dataloaders, n_batches=n_eval_batches
+                        train_dataloaders, prefetched_batches=shared_batches
                     )
                 )
             F = np.stack(F_list, axis=0)
@@ -334,9 +420,52 @@ class EvoMTLTrainer(Trainer):
             algorithm.tell(infills=pop)
             history_F.append(F.copy())
 
+            elapsed = time.perf_counter() - t0
+            self._print_evo_progress(
+                "NSGA-II gen", gen_idx, n_gen, F, elapsed=elapsed
+            )
             self._wandb_log_evo_front_metrics(
                 gen_idx, F, wandb_step_offset + gen_idx
             )
+
+            # --- Pareto-center evaluation on current batch + test set ---
+            _F_pop = algorithm.pop.get("F")
+            _X_pop = algorithm.pop.get("X")
+            _idx_pf = pareto_front_indices(_F_pop)
+            _hv_ref = hv_ref_point if hv_ref_point is not None else _default_hv_ref_point(_F_pop[_idx_pf])
+            _w = marginal_hypervolume_weights(_F_pop[_idx_pf], ref_point=_hv_ref)
+            _z_c = pareto_center_from_weights(_X_pop[_idx_pf], _w)
+            self.apply_z(_z_c)
+            t_ce = time.perf_counter()
+            _train_losses = self.evaluate_multiobjective_losses(
+                train_dataloaders, prefetched_batches=shared_batches
+            )
+            _train_snap = {
+                "loss_item": _train_losses,
+                "results": {task: () for task in self.task_name},
+                "elapsed": time.perf_counter() - t_ce,
+            }
+            if test_dataloaders is not None:
+                _m_test = self.test(
+                    test_dataloaders,
+                    epoch=None,
+                    mode="test",
+                    wandb_log_step=wandb_step_offset + gen_idx,
+                    suppress_display=True,
+                    return_metrics=True,
+                )
+                self.print_compact_train_test_line(
+                    _train_snap, _m_test,
+                    epoch_label=gen_idx + 1,
+                    train_label_prefix="TRAIN (Pareto z, curr batch)",
+                    test_label_prefix="TEST  (Pareto z)",
+                )
+            else:
+                parts = " | ".join(
+                    f"{task}: {float(_train_losses[i]):.4f}"
+                    for i, task in enumerate(self.task_name)
+                )
+                print(f"[EvoMTL] Pareto z TRAIN (curr batch) gen {gen_idx + 1:04d} | {parts}", flush=True)
 
         pop = algorithm.pop
         F_all = pop.get("F")
@@ -377,6 +506,7 @@ class EvoMTLTrainer(Trainer):
         hv_ref_point: Optional[np.ndarray] = None,
         cma_opts: Optional[Dict[str, Any]] = None,
         wandb_step_offset: int = 0,
+        test_dataloaders: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """COMO-CMA-ES (comocma) ask-and-tell; **two objectives only**."""
         if self.task_num != 2:
@@ -414,29 +544,92 @@ class EvoMTLTrainer(Trainer):
         moes = comocma.Sofomore(list_of_solvers, reference_point)
         history_F: List[np.ndarray] = []
 
-        for it in range(int(n_iterations)):
+        n_iterations = int(n_iterations)
+        for it in range(n_iterations):
+            t0 = time.perf_counter()
             solutions = moes.ask("all")
+            shared_batches = self._sample_eval_batches(train_dataloaders, n_eval_batches)
             objs = []
             for x in solutions:
                 self.apply_z(x)
                 L = self.evaluate_multiobjective_losses(
-                    train_dataloaders, n_batches=n_eval_batches
+                    train_dataloaders, prefetched_batches=shared_batches
                 )
                 objs.append([float(L[0]), float(L[1])])
             moes.tell(solutions, objs)
             objs_arr = np.asarray(objs, dtype=np.float64)
             history_F.append(objs_arr.copy())
 
+            elapsed = time.perf_counter() - t0
             extras = None
+            extras_print = None
+            pf_n = len(moes.pareto_front_cut)
             if moes.kernels:
+                sig = float(np.mean([float(k.sigma) for k in moes.kernels]))
                 extras = {
-                    "evo/comocma/sigma_mean": float(
-                        np.mean([float(k.sigma) for k in moes.kernels])
-                    ),
+                    "evo/comocma/sigma_mean": sig,
+                    "evo/comocma/pareto_front_size": float(pf_n),
                 }
+                extras_print = f"sigma_mean={sig:.4f}"
+            else:
+                extras = {"evo/comocma/pareto_front_size": float(pf_n)}
+                extras_print = None
+            self._print_evo_progress(
+                "COMO-CMA",
+                it,
+                n_iterations,
+                objs_arr,
+                extras=extras_print,
+                elapsed=elapsed,
+                pareto_front_size=pf_n,
+            )
+            pf_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
+            ps_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
+            if len(pf_cut) > 0:
+                self.print_pareto_front_objective_stats(
+                    pf_cut,
+                    line_label="Pareto front (ref cut)",
+                )
             self._wandb_log_evo_front_metrics(
                 it, objs_arr, wandb_step_offset + it, extras=extras
             )
+
+            # --- Pareto-center evaluation on current batch + test set ---
+            if len(pf_cut) > 0:
+                _hv_ref = hv_ref_point if hv_ref_point is not None else _default_hv_ref_point(pf_cut)
+                _w = marginal_hypervolume_weights(pf_cut, ref_point=_hv_ref)
+                _z_c = pareto_center_from_weights(ps_cut, _w)
+                self.apply_z(_z_c)
+                t_ce = time.perf_counter()
+                _train_losses = self.evaluate_multiobjective_losses(
+                    train_dataloaders, prefetched_batches=shared_batches
+                )
+                _train_snap = {
+                    "loss_item": _train_losses,
+                    "results": {task: () for task in self.task_name},
+                    "elapsed": time.perf_counter() - t_ce,
+                }
+                if test_dataloaders is not None:
+                    _m_test = self.test(
+                        test_dataloaders,
+                        epoch=None,
+                        mode="test",
+                        wandb_log_step=wandb_step_offset + it,
+                        suppress_display=True,
+                        return_metrics=True,
+                    )
+                    self.print_compact_train_test_line(
+                        _train_snap, _m_test,
+                        epoch_label=it + 1,
+                        train_label_prefix="TRAIN (Pareto z, curr batch)",
+                        test_label_prefix="TEST  (Pareto z)",
+                    )
+                else:
+                    parts = " | ".join(
+                        f"{task}: {float(_train_losses[i]):.4f}"
+                        for i, task in enumerate(self.task_name)
+                    )
+                    print(f"[EvoMTL] Pareto z TRAIN (curr batch) it {it + 1:04d} | {parts}", flush=True)
 
         F_nd = np.asarray(moes.pareto_front_cut, dtype=np.float64)
         X_nd = np.asarray(moes.pareto_set_cut, dtype=np.float64)
@@ -463,6 +656,31 @@ class EvoMTLTrainer(Trainer):
         self.last_evo = out
         return out
 
+    def print_pareto_front_objective_stats(
+        self,
+        pareto_F: np.ndarray,
+        *,
+        line_label: str = "Pareto front",
+    ) -> None:
+        """Print mean / min / max of each MOEA objective (training loss) on the Pareto set."""
+        F = np.atleast_2d(np.asarray(pareto_F, dtype=np.float64))
+        if len(F) == 0:
+            print(f"[EvoMTL] {line_label} | (empty)", flush=True)
+            return
+        n_obj = F.shape[1]
+        if n_obj != self.task_num:
+            raise ValueError(
+                f"pareto_F has {n_obj} objectives but task_num={self.task_num}"
+            )
+        parts = []
+        for j, name in enumerate(self.task_name):
+            col = F[:, j]
+            parts.append(
+                f"{name}: mean={float(np.mean(col)):.4f} "
+                f"min={float(np.min(col)):.4f} max={float(np.max(col)):.4f}"
+            )
+        print(f"[EvoMTL] {line_label} | " + " | ".join(parts), flush=True)
+
     def train_then_evolve(
         self,
         train_dataloaders: Any,
@@ -476,7 +694,7 @@ class EvoMTLTrainer(Trainer):
         val_dataloaders: Any = None,
         finish_wandb: bool = True,
     ) -> Dict[str, Any]:
-        """GD warmup → snapshot → PS → MOEA → Pareto-center test.
+        """GD warmup → snapshot → PS → MOEA → Pareto-center train/test (same as :meth:`Trainer.test`).
 
         Evo checkpoints (``evo_result.pt``, ``model_evo.pt``) use :attr:`Trainer.save_path`
         (same directory as ``best.pt``).
@@ -508,9 +726,17 @@ class EvoMTLTrainer(Trainer):
             else:
                 self.kwargs['evo_args'] = _prev
 
+        moea_key = moea.lower()
+        w = getattr(self, "weighting", None)
+        w_part = f", weighting={w}" if w is not None else ""
+        print(
+            f"[EvoMTL] Switching from GD warmup to MOEA ({moea_key}): "
+            f"finished {gd_epochs} epoch(s){w_part}.",
+            flush=True,
+        )
+
         self.prepare_evolution(ps_class, ps_scale=ps_scale, **ps_kwargs)
 
-        moea_key = moea.lower()
         if moea_key == "nsga2":
             n_outer = int(evo_kwargs.get("n_gen", 0))
         elif moea_key in ("comocma", "mocma", "mo-cma-es"):
@@ -523,9 +749,9 @@ class EvoMTLTrainer(Trainer):
         post_evo_step = wandb_base + max(0, n_outer)
 
         if moea_key == "nsga2":
-            evo_out = self.run_nsga2(train_dataloaders, **evo_kwargs)
+            evo_out = self.run_nsga2(train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs)
         elif moea_key in ("comocma", "mocma", "mo-cma-es"):
-            evo_out = self.run_comocma(train_dataloaders, **evo_kwargs)
+            evo_out = self.run_comocma(train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs)
         else:
             raise ValueError(f"Unknown moea backend: {moea}")
 
@@ -536,7 +762,35 @@ class EvoMTLTrainer(Trainer):
                 step=post_evo_step,
             )
 
-        self.test(test_dataloaders, epoch=None, mode="test", wandb_log_step=post_evo_step)
+        # Pareto-center weights are already applied in run_nsga2 / run_comocma.
+        # COMO-CMA prints ref-cut Pareto stats each iteration; NSGA-II only here.
+        if moea_key not in ("comocma", "mocma", "mo-cma-es"):
+            self.print_pareto_front_objective_stats(evo_out["pareto_F"])
+
+        m_train = self.test(
+            train_dataloaders,
+            epoch=None,
+            mode="train",
+            wandb_log_step=post_evo_step,
+            random_minibatch=True,
+            suppress_display=True,
+            return_metrics=True,
+        )
+        m_test = self.test(
+            test_dataloaders,
+            epoch=None,
+            mode="test",
+            wandb_log_step=post_evo_step,
+            suppress_display=True,
+            return_metrics=True,
+        )
+        self.print_compact_train_test_line(
+            m_train,
+            m_test,
+            epoch_label=post_evo_step,
+            train_label_prefix="TRAIN (Pareto z)",
+            test_label_prefix="TEST (Pareto z)",
+        )
 
         if self.save_path is not None:
             os.makedirs(self.save_path, exist_ok=True)
