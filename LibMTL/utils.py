@@ -1,6 +1,61 @@
 import random, torch, os
 import numpy as np
 import torch.nn as nn
+from typing import Any, Dict, Optional, Tuple
+
+# Added to ``min_baseline`` for pymoo HV reference (minimization objectives).
+HV_MIN_BASELINE_EPS = 1e-6
+
+
+def wandb_metrics_hypervolume(
+    meter: Any,
+    task_dict: Dict[str, Any],
+    task_names: list,
+    min_baseline: Optional[Dict[Tuple[str, int], float]] = None,
+) -> float:
+    """Hypervolume (minimization) from task metrics via :class:`pymoo.indicators.hv.Hypervolume`.
+
+    ``meter`` should expose ``results[task][i]`` like :class:`LibMTL._record._PerformanceMeter`.
+
+    Uses ``weight`` per metric: higher-is-better maps to ``f = 1 - value`` (clip
+    to [0, 1]) with ``ref_i = 1``; lower-is-better maps to ``f = value`` with
+    ``ref_i = min_baseline[(task, i)] + eps``; if no baseline was recorded, uses
+    a heuristic ref. If ``pymoo`` is missing, falls back to ``prod(ref_point - f)``.
+    """
+    fs = []
+    refs = []
+    for task in task_names:
+        weights = task_dict[task]["weight"]
+        for i, _m in enumerate(task_dict[task]["metrics"]):
+            val = float(meter.results[task][i])
+            w = float(weights[i])
+            if w >= 0.5:
+                v = float(np.clip(val, 0.0, 1.0))
+                fs.append(1.0 - v)
+                refs.append(1.0)
+            else:
+                f = max(val, 0.0)
+                fs.append(f)
+                base = None
+                if min_baseline is not None:
+                    base = min_baseline.get((task, i))
+                if base is not None:
+                    b = float(base)
+                    refs.append(b + HV_MIN_BASELINE_EPS)
+                else:
+                    refs.append(max(f + 1e-6, 1.0) + 1.0)
+    F = np.atleast_2d(np.asarray(fs, dtype=np.float64))
+    ref_point = np.asarray(refs, dtype=np.float64)
+    if F.size == 0:
+        return 0.0
+    if np.any(F.ravel() > ref_point):
+        return 0.0
+    try:
+        from pymoo.indicators.hv import Hypervolume
+
+        return float(Hypervolume(ref_point=ref_point).do(F))
+    except ImportError:  # pragma: no cover
+        return float(np.prod(ref_point - F.ravel()))
 
 def get_root_dir():
     r"""Return the root path of project."""

@@ -3,12 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import cvxpy as cp
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from LibMTL._record import _PerformanceMeter
-from LibMTL.utils import count_parameters, set_param
+from LibMTL.utils import count_parameters, set_param, wandb_metrics_hypervolume
 import LibMTL.weighting as weighting_method
 import LibMTL.architecture as architecture_method
+
 
 class Trainer(nn.Module):
     r'''A Multi-Task Learning Trainer.
@@ -96,6 +97,8 @@ class Trainer(nn.Module):
         self.load_path = load_path
         self.weighting = weighting
         self._wandb_enabled = False
+        #: Initial (pre-training) metric values for minimization objectives; used as HV ref.
+        self._hv_min_baselines: Optional[Dict[Tuple[str, int], float]] = None
 
         self.bilevel_methods = ['MOML', 'FORUM', 'AutoLambda']
 
@@ -126,6 +129,52 @@ class Trainer(nn.Module):
         wandb.init(**init_kw)
         self._wandb_enabled = True
 
+    def _evaluate_loader_for_metrics(self, dataloaders) -> None:
+        """One full eval pass; fills ``meter`` (``get_score()``)."""
+        test_loader, test_batch = self._prepare_dataloaders(dataloaders)
+        self.model.eval()
+        self.meter.record_time('begin')
+        with torch.no_grad():
+            if not self.multi_input:
+                for batch_index in range(test_batch):
+                    test_inputs, test_gts = self._process_data(test_loader)
+                    test_preds = self.model(test_inputs)
+                    test_preds = self.process_preds(test_preds)
+                    self.meter.update(test_preds, test_gts)
+            else:
+                for tn, task in enumerate(self.task_name):
+                    for batch_index in range(test_batch[tn]):
+                        test_input, test_gt = self._process_data(test_loader[task])
+                        test_pred = self.model(test_input, task)
+                        test_pred = test_pred[task]
+                        test_pred = self.process_preds(test_pred)
+                        self.meter.update(test_pred, test_gt, task)
+        self.meter.record_time('end')
+        self.meter.get_score()
+
+    def _ensure_hv_minimization_baseline(self, dataloaders) -> None:
+        """Record minimization-metric values on ``dataloaders`` before training (HV reference)."""
+        if not self._wandb_enabled:
+            return
+        if self._hv_min_baselines is not None:
+            return
+        has_min = any(
+            float(self.task_dict[t]["weight"][i]) < 0.5
+            for t in self.task_name
+            for i in range(len(self.task_dict[t]["metrics"]))
+        )
+        if not has_min:
+            self._hv_min_baselines = {}
+            return
+        self._evaluate_loader_for_metrics(dataloaders)
+        self._hv_min_baselines = {}
+        for t in self.task_name:
+            for i in range(len(self.task_dict[t]["metrics"])):
+                if float(self.task_dict[t]["weight"][i]) < 0.5:
+                    self._hv_min_baselines[(t, i)] = float(self.meter.results[t][i])
+        self.meter.reinit()
+        self.model.train()
+
     def _wandb_log_epoch_metrics(self, step: int, mode: str, *, final: bool = False) -> None:
         if not self._wandb_enabled:
             return
@@ -142,6 +191,23 @@ class Trainer(nn.Module):
         log[f"{prefix}/time"] = float(self.meter.end_time - self.meter.beg_time)
         if mode == "train":
             log[f"{prefix}/lr"] = float(self.optimizer.param_groups[0]["lr"])
+
+        # Aggregate across tasks: mean loss, mean metric, hypervolume over metric vector
+        losses = [float(self.meter.loss_item[tn]) for tn in range(len(self.task_name))]
+        if losses:
+            log[f"{prefix}/losses/avg"] = float(np.mean(losses))
+        metric_vals = []
+        for task in self.task_name:
+            for i in range(len(self.task_dict[task]["metrics"])):
+                metric_vals.append(float(self.meter.results[task][i]))
+        if metric_vals:
+            log[f"{prefix}/metrics/avg"] = float(np.mean(metric_vals))
+        log[f"{prefix}/metrics/hv"] = wandb_metrics_hypervolume(
+            self.meter,
+            self.task_dict,
+            self.task_name,
+            self._hv_min_baselines,
+        )
 
         wandb.log(log, step=step)
 
@@ -323,6 +389,8 @@ class Trainer(nn.Module):
         self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
         self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
         self.model.epochs = epochs
+        if self._wandb_enabled:
+            self._ensure_hv_minimization_baseline(test_dataloaders)
         for epoch in range(epochs):
             self.model.epoch = epoch
             self.model.train()
@@ -498,6 +566,8 @@ class Trainer(nn.Module):
         self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
         self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
         self.model.epochs = epochs
+        if self._wandb_enabled:
+            self._ensure_hv_minimization_baseline(test_dataloaders)
         for epoch in range(epochs):
             self.model.epoch = epoch
             self.model.train()
