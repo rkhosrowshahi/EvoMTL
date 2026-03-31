@@ -6,7 +6,13 @@ import torch.nn as nn
 
 
 class RandomProjectionParameterSharing:
-    """Random projection from k-dimensional latent space to full parameter space."""
+    """Random projection from k-dimensional latent space to full parameter space.
+
+    The latent vector has length ``k + 1``: the first ``k`` components map through
+    a fixed random matrix ``P``; the last component is a scalar **s** that scales
+    the projected delta: ``delta = s * (P @ z)``.  Initial ``s`` is 1 so that with
+    ``z = 0`` the delta is still zero (``P @ 0 = 0``).
+    """
 
     def __init__(self, model, k, device="cuda", seed=42):
         self.model = model
@@ -19,16 +25,22 @@ class RandomProjectionParameterSharing:
         torch.manual_seed(seed)
 
         self.projections = np.random.randn(self.N, self.k) / np.sqrt(self.k)
-        self.num_dims = self.k
+        self.num_dims = self.k + 1
         self.z0 = self._init_z0()
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        z0 = np.zeros(self.num_dims)
+        z0[-1] = 1.0
+        return z0
 
     def expand(self, z):
         """Map latent vector z to full parameter space via random projection."""
-        x = self.projections @ z
-        return x
+        if not isinstance(z, np.ndarray):
+            z = np.asarray(z, dtype=np.float64)
+        z_lat = z[: self.k]
+        s = float(z[self.k])
+        x = self.projections @ z_lat
+        return s * x
 
     def process(self, x, alpha=1.0):
         """Convert expanded parameters to model-compatible form."""
@@ -50,6 +62,258 @@ class RandomProjectionParameterSharing:
         return self.process(x)
 
 
+class LayerwiseRandomProjectionParameterSharing:
+    """Layer-wise random projection with direct bias evolution.
+
+    Each non-bias parameter tensor gets its own projection matrix
+    ``P_l in R^{n_l x k}``, so latent dimensionality is::
+
+        num_dims = k * L + sum(bias_sizes)
+
+    where ``L`` is the number of projected (non-bias) parameter tensors.
+    Bias tensors are appended directly to ``z`` (no projection).
+    """
+
+    def __init__(self, model, k, device="cuda", seed=42):
+        self.model = model
+        self.base_params = torch.nn.utils.parameters_to_vector(self.model.parameters())
+        self.N = len(self.base_params)
+        self.k = k
+        self.device = device
+
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
+        self.layer_info = []
+        self.param_shapes = []
+        self.param_sizes = []
+        self.projections = []
+        total_dims = 0
+        n_projected_layers = 0
+        n_bias_dims = 0
+
+        for name, param in self.model.named_parameters():
+            shape = param.shape
+            size = int(np.prod(shape))
+            self.param_shapes.append(shape)
+            self.param_sizes.append(size)
+
+            if name.endswith(".bias"):
+                dims = size
+                self.layer_info.append(
+                    {
+                        "type": "direct",
+                        "name": name,
+                        "n": size,
+                        "dims": dims,
+                        "offset": total_dims,
+                        "size": size,
+                    }
+                )
+                total_dims += dims
+                n_bias_dims += dims
+            else:
+                P = np.random.randn(size, self.k) / np.sqrt(self.k)
+                proj_idx = len(self.projections)
+                self.projections.append(P)
+                dims = self.k
+                self.layer_info.append(
+                    {
+                        "type": "proj",
+                        "name": name,
+                        "dims": dims,
+                        "offset": total_dims,
+                        "size": size,
+                        "proj_idx": proj_idx,
+                        "k": self.k,
+                    }
+                )
+                total_dims += dims
+                n_projected_layers += 1
+
+        self.num_dims = total_dims
+        self.z0 = self._init_z0()
+
+        print(
+            f"LayerwiseRandomProj: L={n_projected_layers}, k={self.k}, "
+            f"bias_dims={n_bias_dims} | z dim = {self.num_dims} | "
+            f"model params = {self.N}"
+        )
+
+    def _init_z0(self):
+        return np.zeros(self.num_dims)
+
+    def expand(self, z):
+        """Expand layer-wise latent vector to full parameter-space delta."""
+        if not isinstance(z, np.ndarray):
+            z = np.asarray(z, dtype=np.float64)
+
+        reconstructed = []
+        for info in self.layer_info:
+            offset = info["offset"]
+            dims = info["dims"]
+            z_layer = z[offset : offset + dims]
+
+            if info["type"] == "proj":
+                P = self.projections[info["proj_idx"]]
+                reconstructed.append(P @ z_layer)
+            else:
+                reconstructed.append(z_layer.copy())
+
+        return np.concatenate(reconstructed)
+
+    def process(self, x, alpha=1.0):
+        """Convert expanded parameters to model-compatible form."""
+        if not isinstance(x, torch.Tensor):
+            x = torch.Tensor(x).to(self.device).float()
+        x = x.to(self.device)
+        return alpha * x
+
+    def load_parameters_to_model(self, parameters):
+        """Set model weights from a flat array."""
+        if not isinstance(parameters, torch.Tensor):
+            parameters = torch.from_numpy(parameters).to(self.device).float()
+        parameters = parameters.to(self.device)
+        torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
+
+    def forward(self, z):
+        """Full forward: z -> expand -> process -> theta."""
+        x = self.expand(z)
+        return self.process(x)
+
+
+class LayerwiseScaledRandomProjectionParameterSharing:
+    """Layer-wise random projection with per-layer alpha and direct biases.
+
+    Each non-bias tensor ``l`` has a projection matrix ``P_l in R^{n_l x k}`` and
+    a dedicated scalar ``alpha_l``:
+
+        delta_l = alpha_l * (P_l @ z_l)
+
+    Latent dimensionality is:
+
+        num_dims = (k + 1) * L + sum(bias_sizes)
+
+    where ``L`` is the number of projected (non-bias) parameter tensors.
+    Bias tensors are evolved directly (no projection).
+    """
+
+    def __init__(self, model, k, device="cuda", seed=42):
+        self.model = model
+        self.base_params = torch.nn.utils.parameters_to_vector(self.model.parameters())
+        self.N = len(self.base_params)
+        self.k = k
+        self.device = device
+
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
+        self.layer_info = []
+        self.param_shapes = []
+        self.param_sizes = []
+        self.projections = []
+        total_dims = 0
+        n_projected_layers = 0
+        n_bias_dims = 0
+
+        for name, param in self.model.named_parameters():
+            shape = param.shape
+            size = int(np.prod(shape))
+            self.param_shapes.append(shape)
+            self.param_sizes.append(size)
+
+            if name.endswith(".bias"):
+                dims = size
+                self.layer_info.append(
+                    {
+                        "type": "direct",
+                        "name": name,
+                        "n": size,
+                        "dims": dims,
+                        "offset": total_dims,
+                        "size": size,
+                    }
+                )
+                total_dims += dims
+                n_bias_dims += dims
+            else:
+                P = np.random.randn(size, self.k) / np.sqrt(self.k)
+                proj_idx = len(self.projections)
+                self.projections.append(P)
+                dims = self.k + 1  # k latent coords + 1 alpha scale
+                self.layer_info.append(
+                    {
+                        "type": "proj_scaled",
+                        "name": name,
+                        "dims": dims,
+                        "offset": total_dims,
+                        "size": size,
+                        "proj_idx": proj_idx,
+                        "k": self.k,
+                    }
+                )
+                total_dims += dims
+                n_projected_layers += 1
+
+        self.num_dims = total_dims
+        self.z0 = self._init_z0()
+
+        print(
+            f"LayerwiseScaledRandomProj: L={n_projected_layers}, k={self.k}, "
+            f"alpha_dims={n_projected_layers}, bias_dims={n_bias_dims} | "
+            f"z dim = {self.num_dims} | model params = {self.N}"
+        )
+
+    def _init_z0(self):
+        z0 = np.zeros(self.num_dims)
+        for info in self.layer_info:
+            if info["type"] == "proj_scaled":
+                z0[info["offset"] + self.k] = 1.0
+        return z0
+
+    def expand(self, z):
+        """Expand latent vector to full parameter-space delta."""
+        if not isinstance(z, np.ndarray):
+            z = np.asarray(z, dtype=np.float64)
+
+        reconstructed = []
+        for info in self.layer_info:
+            offset = info["offset"]
+            dims = info["dims"]
+            z_layer = z[offset : offset + dims]
+
+            if info["type"] == "proj_scaled":
+                z_lat = z_layer[: self.k]
+                alpha = float(z_layer[self.k])
+                P = self.projections[info["proj_idx"]]
+                reconstructed.append(alpha * (P @ z_lat))
+            else:
+                reconstructed.append(z_layer.copy())
+
+        return np.concatenate(reconstructed)
+
+    def process(self, x, alpha=1.0):
+        """Convert expanded parameters to model-compatible form."""
+        if not isinstance(x, torch.Tensor):
+            x = torch.Tensor(x).to(self.device).float()
+        x = x.to(self.device)
+        return alpha * x
+
+    def load_parameters_to_model(self, parameters):
+        """Set model weights from a flat array."""
+        if not isinstance(parameters, torch.Tensor):
+            parameters = torch.from_numpy(parameters).to(self.device).float()
+        parameters = parameters.to(self.device)
+        torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
+
+    def forward(self, z):
+        """Full forward: z -> expand -> process -> theta."""
+        x = self.expand(z)
+        return self.process(x)
+
+
+
+
 class FlattenLoRAParameterSharing:
     """LoRA-style low-rank decomposition over flattened model parameters."""
 
@@ -66,23 +330,37 @@ class FlattenLoRAParameterSharing:
         self.layer_info = []
         self.param_shapes = []
         self.param_sizes = []
-        param_tensors = list(model.parameters())
         total_dims = 0
+        dims_conv = 0
+        dims_linear = 0
+        dims_other = 0
+        module_for_param = _build_param_module_map(model)
 
-        for param in param_tensors:
+        for name, param in model.named_parameters():
             shape = param.shape
             self.param_shapes.append(shape)
+            mod_type = module_for_param.get(name)
+            is_conv2d = mod_type is not None and issubclass(mod_type, nn.Conv2d)
+            is_linear = mod_type is not None and issubclass(mod_type, nn.Linear)
 
             if len(shape) == 2:
                 m, n = shape
                 dims = m * r + n * r
                 self.layer_info.append({'type': '2d', 'm': m, 'n': n, 'dims': dims, 'offset': total_dims})
                 total_dims += dims
+                if is_linear:
+                    dims_linear += dims
+                else:
+                    dims_other += dims
             elif len(shape) == 1:
                 n = shape[0]
                 dims = n
                 self.layer_info.append({'type': '1d', 'n': n, 'dims': dims, 'offset': total_dims})
                 total_dims += dims
+                if is_linear:
+                    dims_linear += dims
+                else:
+                    dims_other += dims
             elif len(shape) == 4:
                 out_ch, in_ch, h, w = shape
                 m, n = out_ch, in_ch * h * w
@@ -92,16 +370,27 @@ class FlattenLoRAParameterSharing:
                     'dims': dims, 'offset': total_dims
                 })
                 total_dims += dims
+                if is_conv2d:
+                    dims_conv += dims
+                else:
+                    dims_other += dims
             else:
                 n = int(np.prod(shape))
                 dims = n
                 self.layer_info.append({'type': 'other', 'n': n, 'original_shape': shape, 'dims': dims, 'offset': total_dims})
                 total_dims += dims
+                dims_other += dims
 
             self.param_sizes.append(int(np.prod(shape)))
 
         self.num_dims = total_dims
         self.z0 = self._init_z0()
+
+        extra = f", other={dims_other}" if dims_other else ""
+        print(
+            f"FlattenLoRA: z dim = {total_dims} (conv={dims_conv}, linear={dims_linear}{extra}) | "
+            f"model params = {self.N}"
+        )
 
     def _init_z0(self):
         return np.zeros(self.num_dims)
@@ -184,15 +473,21 @@ class DictLoRAParameterSharing:
         self.layer_info = []
         self.param_shapes = []
         self.param_sizes = []
-        param_tensors = list(model.parameters())
         base_offset = 0
         total_dims = 0
+        dims_conv = 0
+        dims_linear = 0
+        dims_other = 0
+        module_for_param = _build_param_module_map(model)
 
-        for param in param_tensors:
+        for name, param in model.named_parameters():
             shape = param.shape
             self.param_shapes.append(shape)
             size = int(np.prod(shape))
             self.param_sizes.append(size)
+            mod_type = module_for_param.get(name)
+            is_conv2d = mod_type is not None and issubclass(mod_type, nn.Conv2d)
+            is_linear = mod_type is not None and issubclass(mod_type, nn.Linear)
 
             if len(shape) == 2:
                 m, n = shape
@@ -202,6 +497,10 @@ class DictLoRAParameterSharing:
                     'base_offset': base_offset, 'base_size': size,
                 })
                 total_dims += dims
+                if is_linear:
+                    dims_linear += dims
+                else:
+                    dims_other += dims
             elif len(shape) == 1:
                 n = shape[0]
                 dims = n
@@ -210,6 +509,10 @@ class DictLoRAParameterSharing:
                     'base_offset': base_offset, 'base_size': size,
                 })
                 total_dims += dims
+                if is_linear:
+                    dims_linear += dims
+                else:
+                    dims_other += dims
             elif len(shape) == 4:
                 out_ch, in_ch, kh, kw = shape
                 M = self.r
@@ -221,6 +524,10 @@ class DictLoRAParameterSharing:
                     'original_shape': shape, 'base_offset': base_offset, 'base_size': size,
                 })
                 total_dims += dims
+                if is_conv2d:
+                    dims_conv += dims
+                else:
+                    dims_other += dims
             else:
                 n = size
                 dims = n
@@ -229,11 +536,18 @@ class DictLoRAParameterSharing:
                     'offset': total_dims, 'base_offset': base_offset, 'base_size': size,
                 })
                 total_dims += dims
+                dims_other += dims
 
             base_offset += size
 
         self.num_dims = total_dims
         self.z0 = self._init_z0()
+
+        extra = f", other={dims_other}" if dims_other else ""
+        print(
+            f"DictLoRA: z dim = {total_dims} (conv={dims_conv}, linear={dims_linear}{extra}) | "
+            f"model params = {self.N}"
+        )
 
     def _init_z0(self):
         return np.zeros(self.num_dims)
@@ -344,6 +658,8 @@ class LinearOnlyLoRA:
         n_lora = 0
         n_direct = 0
         n_frozen = 0
+        dims_conv = 0
+        dims_linear = 0
 
         for name, param in model.named_parameters():
             shape = param.shape
@@ -361,6 +677,7 @@ class LinearOnlyLoRA:
                     'dims': dims, 'offset': total_dims, 'size': size,
                 })
                 total_dims += dims
+                dims_linear += dims
                 n_lora += 1
             elif is_linear and len(shape) == 1:
                 dims = shape[0]
@@ -369,6 +686,7 @@ class LinearOnlyLoRA:
                     'dims': dims, 'offset': total_dims, 'size': size,
                 })
                 total_dims += dims
+                dims_linear += dims
                 n_direct += 1
             else:
                 self.layer_info.append({
@@ -382,7 +700,8 @@ class LinearOnlyLoRA:
 
         print(
             f"LinearOnlyLoRA: {n_lora} LoRA layers, {n_direct} direct (bias), "
-            f"{n_frozen} frozen | z dim = {total_dims} | model params = {self.N}"
+            f"{n_frozen} frozen | z dim = {total_dims} (conv={dims_conv}, linear={dims_linear}) | "
+            f"model params = {self.N}"
         )
 
     def _init_z0(self):
@@ -459,6 +778,8 @@ class ModulationLoRA:
         n_lora = 0
         n_direct = 0
         n_frozen = 0
+        dims_conv = 0
+        dims_linear = 0
 
         for name, param in model.named_parameters():
             shape = param.shape
@@ -479,6 +800,7 @@ class ModulationLoRA:
                     'shape': shape, 'base_weight': base_w,
                 })
                 total_dims += dims
+                dims_conv += dims
                 n_modulated += 1
             elif is_linear and len(shape) == 2:
                 m, n = shape
@@ -488,6 +810,7 @@ class ModulationLoRA:
                     'dims': dims, 'offset': total_dims, 'size': size,
                 })
                 total_dims += dims
+                dims_linear += dims
                 n_lora += 1
             elif is_linear and len(shape) == 1:
                 dims = shape[0]
@@ -496,6 +819,7 @@ class ModulationLoRA:
                     'dims': dims, 'offset': total_dims, 'size': size,
                 })
                 total_dims += dims
+                dims_linear += dims
                 n_direct += 1
             else:
                 self.layer_info.append({
@@ -510,7 +834,8 @@ class ModulationLoRA:
         print(
             f"ModulationLoRA: {n_modulated} modulated conv, {n_lora} LoRA linear, "
             f"{n_direct} direct (bias), {n_frozen} frozen | "
-            f"z dim = {total_dims} | model params = {self.N}"
+            f"z dim = {total_dims} (conv={dims_conv}, linear={dims_linear}) | "
+            f"model params = {self.N}"
         )
 
     def _init_z0(self):
@@ -607,6 +932,8 @@ class SpectralLoRA:
         n_lora = 0
         n_direct = 0
         n_frozen = 0
+        dims_conv = 0
+        dims_linear = 0
 
         for name, param in model.named_parameters():
             shape = param.shape
@@ -633,6 +960,7 @@ class SpectralLoRA:
                     'sigma_k': sigma[:k].copy(),
                 })
                 total_dims += k
+                dims_conv += k
                 n_spectral += 1
             elif is_linear and len(shape) == 2:
                 m, n = shape
@@ -642,6 +970,7 @@ class SpectralLoRA:
                     'dims': dims, 'offset': total_dims, 'size': size,
                 })
                 total_dims += dims
+                dims_linear += dims
                 n_lora += 1
             elif is_linear and len(shape) == 1:
                 dims = shape[0]
@@ -650,6 +979,7 @@ class SpectralLoRA:
                     'dims': dims, 'offset': total_dims, 'size': size,
                 })
                 total_dims += dims
+                dims_linear += dims
                 n_direct += 1
             else:
                 self.layer_info.append({
@@ -664,7 +994,8 @@ class SpectralLoRA:
         print(
             f"SpectralLoRA: {n_spectral} spectral conv (k={r}), {n_lora} LoRA linear, "
             f"{n_direct} direct (bias), {n_frozen} frozen | "
-            f"z dim = {total_dims} | model params = {self.N}"
+            f"z dim = {total_dims} (conv={dims_conv}, linear={dims_linear}) | "
+            f"model params = {self.N}"
         )
 
     def _init_z0(self):
@@ -693,6 +1024,155 @@ class SpectralLoRA:
                 A = z[offset:offset + m * r].reshape(m, r)
                 B = z[offset + m * r:offset + m * r + n * r].reshape(n, r)
                 parts.append(((A @ B.T) * (1.0 / np.sqrt(r))).flatten())
+            elif info['type'] == 'direct_1d':
+                offset = info['offset']
+                parts.append(z[offset:offset + info['n']].copy())
+            else:
+                parts.append(np.zeros(info['size']))
+
+        return np.concatenate(parts)
+
+    def process(self, x, alpha=1.0):
+        if not isinstance(x, torch.Tensor):
+            x = torch.Tensor(x).to(self.device).float()
+        return alpha * x.to(self.device)
+
+    def load_parameters_to_model(self, parameters):
+        if not isinstance(parameters, torch.Tensor):
+            parameters = torch.from_numpy(parameters).to(self.device).float()
+        torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
+
+    def forward(self, z):
+        return self.process(self.expand(z))
+
+
+class SpectralAllSVD:
+    """SVD spectral modulation for Conv2d and Linear 2D weights (no LoRA).
+
+    Conv2d and ``nn.Linear`` weight matrices are treated the same: each is
+    decomposed at init as ``W = U @ diag(sigma) @ V^T``; evolution only
+    modulates the top-*k* singular values with frozen *U*, *V*::
+
+        delta_W = U[:, :k] @ diag(z_layer) @ V[:, :k]^T
+
+    Linear biases are evolved directly. BatchNorm, LayerNorm, and all other
+    parameters stay frozen (zero delta).
+
+    ``r`` sets *k* = ``min(r, rank(W))`` per layer for both conv and linear
+    weights.
+    """
+
+    def __init__(self, model, r, device="cuda", seed=42):
+        self.model = model
+        self.r = r
+        self.device = device
+
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
+        self.base_params = torch.nn.utils.parameters_to_vector(model.parameters())
+        self.N = len(self.base_params)
+
+        module_for_param = _build_param_module_map(model)
+
+        self.layer_info = []
+        self.param_shapes = []
+        self.param_sizes = []
+        total_dims = 0
+        n_spectral_conv = 0
+        n_spectral_linear = 0
+        n_direct = 0
+        n_frozen = 0
+        dims_conv = 0
+        dims_linear = 0
+
+        for name, param in model.named_parameters():
+            shape = param.shape
+            size = int(np.prod(shape))
+            self.param_shapes.append(shape)
+            self.param_sizes.append(size)
+            mod_type = module_for_param.get(name)
+            is_conv2d = mod_type is not None and issubclass(mod_type, nn.Conv2d)
+            is_linear = mod_type is not None and issubclass(mod_type, nn.Linear)
+
+            if is_conv2d and len(shape) == 4:
+                Cout, Cin, kh, kw = shape
+                W_2d = param.detach().cpu().numpy().reshape(Cout, Cin * kh * kw)
+                full_rank = min(Cout, Cin * kh * kw)
+                k = min(r, full_rank)
+                U_full, sigma, Vt_full = np.linalg.svd(W_2d, full_matrices=False)
+                U_k = U_full[:, :k].copy()
+                Vt_k = Vt_full[:k, :].copy()
+
+                self.layer_info.append({
+                    'type': 'spectral_4d', 'name': name,
+                    'k': k, 'dims': k, 'offset': total_dims, 'size': size,
+                    'shape': shape, 'U_k': U_k, 'Vt_k': Vt_k,
+                    'sigma_k': sigma[:k].copy(),
+                })
+                total_dims += k
+                dims_conv += k
+                n_spectral_conv += 1
+            elif is_linear and len(shape) == 2:
+                W_2d = param.detach().cpu().numpy()
+                m, n = W_2d.shape
+                full_rank = min(m, n)
+                k = min(r, full_rank)
+                U_full, sigma, Vt_full = np.linalg.svd(W_2d, full_matrices=False)
+                U_k = U_full[:, :k].copy()
+                Vt_k = Vt_full[:k, :].copy()
+
+                self.layer_info.append({
+                    'type': 'spectral_2d', 'name': name,
+                    'k': k, 'dims': k, 'offset': total_dims, 'size': size,
+                    'shape': shape, 'U_k': U_k, 'Vt_k': Vt_k,
+                    'sigma_k': sigma[:k].copy(),
+                })
+                total_dims += k
+                dims_linear += k
+                n_spectral_linear += 1
+            elif is_linear and len(shape) == 1:
+                dims = shape[0]
+                self.layer_info.append({
+                    'type': 'direct_1d', 'name': name, 'n': dims,
+                    'dims': dims, 'offset': total_dims, 'size': size,
+                })
+                total_dims += dims
+                dims_linear += dims
+                n_direct += 1
+            else:
+                self.layer_info.append({
+                    'type': 'frozen', 'name': name,
+                    'dims': 0, 'offset': total_dims, 'size': size,
+                })
+                n_frozen += 1
+
+        self.num_dims = total_dims
+        self.z0 = self._init_z0()
+
+        print(
+            f"SpectralAllSVD: {n_spectral_conv} spectral conv + {n_spectral_linear} spectral linear "
+            f"(k<={r}), {n_direct} direct (bias), {n_frozen} frozen | "
+            f"z dim = {total_dims} (conv={dims_conv}, linear={dims_linear}) | "
+            f"model params = {self.N}"
+        )
+
+    def _init_z0(self):
+        return np.zeros(self.num_dims)
+
+    def expand(self, z):
+        """Deltas via ``U_k @ diag(z) @ Vt_k`` for conv and linear weights."""
+        if not isinstance(z, np.ndarray):
+            z = np.array(z)
+
+        parts = []
+        for info in self.layer_info:
+            if info['type'] in ('spectral_4d', 'spectral_2d'):
+                offset = info['offset']
+                k = info['k']
+                z_sv = z[offset:offset + k]
+                delta_2d = (info['U_k'] * z_sv) @ info['Vt_k']
+                parts.append(delta_2d.flatten())
             elif info['type'] == 'direct_1d':
                 offset = info['offset']
                 parts.append(z[offset:offset + info['n']].copy())

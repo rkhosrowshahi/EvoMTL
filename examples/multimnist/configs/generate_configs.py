@@ -163,6 +163,8 @@ evo_z_lower: -3.0
 evo_z_upper: 3.0
 evo_n_eval_batches: 1
 evo_seed: {seed}
+evo_hv_center_aggregation: linear
+evo_hv_softmax_temperature: 1.0
 """
 
 
@@ -171,15 +173,29 @@ def _evo_block_comocma(seed: int) -> str:
 # EvoMTL (MOEA after supervised training; COMO-CMA-ES; two tasks only)
 evo_training: true
 evo_moea: comocma
-evo_ps: spherical_lora
+evo_ps: spectral_all_svd
 evo_ps_scale: 1.0
 evo_ps_r: 4
 evo_ps_seed: 42
 evo_iterations: 30
+evo_pop_size: 24
+evo_z_lower: -1.0
+evo_z_upper: 1.0
 evo_num_kernels: 10
 evo_sigma0: 0.3
 evo_n_eval_batches: 1
 evo_seed: {seed}
+evo_cma_tolx: 0.0
+evo_cma_tolfun: 0.0
+evo_cma_tolfunrel: 0.0
+evo_cma_tolfunhist: 0.0
+evo_cma_tolstagnation: 0
+evo_cma_tolflatfitness: 1e9
+# COMO-CMA reference points: [] = defaults (Sofomore: 2*probe_loss+1; pymoo HV: nadir+1e-6).
+evo_sofomore_reference_point: []
+evo_hv_ref_point: []
+evo_hv_center_aggregation: linear
+evo_hv_softmax_temperature: 1.0
 """
 
 

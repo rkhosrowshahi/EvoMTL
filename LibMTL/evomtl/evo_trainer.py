@@ -28,20 +28,26 @@ from ..trainer import Trainer
 from .parameter_sharing import (
     DictLoRAParameterSharing,
     FlattenLoRAParameterSharing,
+    LayerwiseRandomProjectionParameterSharing,
+    LayerwiseScaledRandomProjectionParameterSharing,
     LinearOnlyLoRA,
     ModulationLoRA,
     RandomProjectionParameterSharing,
+    SpectralAllSVD,
     SpectralLoRA,
 )
 
 EVO_PS_REGISTRY = {
     "random_proj": RandomProjectionParameterSharing,
+    "layerwise_random_proj": LayerwiseRandomProjectionParameterSharing,
+    "layerwise_scaled_random_proj": LayerwiseScaledRandomProjectionParameterSharing,
     "flatten_lora": FlattenLoRAParameterSharing,
     "spherical_lora": FlattenLoRAParameterSharing,
     "dict_lora": DictLoRAParameterSharing,
     "linear_lora": LinearOnlyLoRA,
     "modulation_lora": ModulationLoRA,
     "spectral_lora": SpectralLoRA,
+    "spectral_all_svd": SpectralAllSVD,
 }
 
 
@@ -75,6 +81,32 @@ def _default_hv_ref_point(F: np.ndarray) -> np.ndarray:
     return np.max(F, axis=0) + 1e-6
 
 
+def _normalize_objectives_for_hv(
+    F_nd: np.ndarray,
+    ref_point: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Min-max each objective on the Pareto set (ideal→0, nadir→1).
+
+    Matches ``hv_normalized_*_center``: ``scale = where(nadir-ideal > 1e-8, ...)``,
+    default normalized HV reference ``1.1`` per objective. Custom ``ref_point``
+    (raw space) uses the same ``ideal`` / ``scale``.
+    """
+    F_nd = np.atleast_2d(np.asarray(F_nd, dtype=np.float64))
+    n, m = F_nd.shape
+    if n == 0:
+        return F_nd, np.full(m, 1.1, dtype=np.float64)
+    ideal = np.min(F_nd, axis=0)
+    nadir = np.max(F_nd, axis=0)
+    scale = np.where(nadir - ideal > 1e-8, nadir - ideal, 1.0)
+    F_norm = (F_nd - ideal) / scale
+    if ref_point is None:
+        ref_norm = np.full(m, 1.1, dtype=np.float64)
+    else:
+        ref = np.asarray(ref_point, dtype=np.float64).reshape(m)
+        ref_norm = (ref - ideal) / scale
+    return F_norm, ref_norm
+
+
 def pareto_front_indices(F: np.ndarray) -> np.ndarray:
     """Indices of the first nondominated front (minimization)."""
     F = np.atleast_2d(F)
@@ -82,21 +114,77 @@ def pareto_front_indices(F: np.ndarray) -> np.ndarray:
     return nds.do(F, only_non_dominated_front=True)
 
 
-def marginal_hypervolume_weights(
-    F_nd: np.ndarray, ref_point: Optional[np.ndarray] = None
+def pareto_center_weights_from_marginal_hv(
+    contributions: np.ndarray,
+    *,
+    aggregation: str = "linear",
+    softmax_temperature: float = 1.0,
 ) -> np.ndarray:
-    """Nonnegative weights proportional to marginal HV contribution of each point.
+    """Turn raw marginal HV contributions into weights for a Pareto-set average.
+
+    * ``linear``: nonnegative contributions, normalized to sum to 1 (same as
+      ``hv_normalized_linear_center``).
+    * ``softmax``: ``exp((c/temp) - max(c/temp))`` normalized (same as
+      ``hv_normalized_softmax_center``).
+    """
+    contributions = np.asarray(contributions, dtype=np.float64).reshape(-1)
+    n = contributions.shape[0]
+    if n == 0:
+        return np.zeros(0)
+    agg = aggregation.strip().lower()
+    if agg == "softmax":
+        temp = max(float(softmax_temperature), 1e-8)
+        scaled = contributions / temp
+        scaled = scaled - np.max(scaled)
+        expv = np.exp(scaled)
+        s = float(expv.sum())
+        if s < 1e-12:
+            return np.ones(n) / n
+        return expv / s
+    if agg != "linear":
+        raise ValueError(
+            "aggregation must be 'linear' or 'softmax', got {!r}".format(aggregation)
+        )
+    contribs = np.maximum(0.0, contributions)
+    s = contribs.sum()
+    if s < 1e-12:
+        return np.ones(n) / n
+    return contribs / s
+
+
+def marginal_hypervolume_weights(
+    F_nd: np.ndarray,
+    ref_point: Optional[np.ndarray] = None,
+    *,
+    normalize_objectives: bool = True,
+    aggregation: str = "linear",
+    softmax_temperature: float = 1.0,
+) -> np.ndarray:
+    """Weights for Pareto-center averaging from marginal hypervolume contributions.
 
     Parameters
     ----------
     F_nd : ndarray, shape (n, m)
         Objectives for points on one Pareto front (nondominated among themselves).
     ref_point : ndarray, shape (m,), optional
-        Dominated by all points (worse in every objective for minimization).
+        In raw objective space (before normalization). Dominated by all points
+        (worse in every objective for minimization). Ignored for the default
+        normalized reference when ``normalize_objectives`` is True and this is
+        omitted.
+    normalize_objectives : bool
+        If True (default), min-max normalize each objective on ``F_nd`` before HV
+        so Pareto-center weights are not skewed by objective scale.
+    aggregation : {'linear', 'softmax'}
+        How marginal contributions become weights (see
+        :func:`pareto_center_weights_from_marginal_hv`).
+    softmax_temperature : float
+        Used when ``aggregation`` is ``softmax``; larger values yield softer weights.
     """
     F_nd = np.atleast_2d(F_nd)
     n, m = F_nd.shape
-    if ref_point is None:
+    if normalize_objectives:
+        F_nd, ref_point = _normalize_objectives_for_hv(F_nd, ref_point)
+    elif ref_point is None:
         ref_point = _default_hv_ref_point(F_nd)
     else:
         ref_point = np.asarray(ref_point, dtype=np.float64).reshape(m)
@@ -114,10 +202,11 @@ def marginal_hypervolume_weights(
         mask[i] = False
         sub = hv.do(F_nd[mask])
         contribs[i] = max(0.0, total - sub)
-    s = contribs.sum()
-    if s < 1e-12:
-        return np.ones(n) / n
-    return contribs / s
+    return pareto_center_weights_from_marginal_hv(
+        contribs,
+        aggregation=aggregation,
+        softmax_temperature=softmax_temperature,
+    )
 
 
 def pareto_center_from_weights(X_nd: np.ndarray, weights: np.ndarray) -> np.ndarray:
@@ -137,9 +226,10 @@ class EvoMTLTrainer(Trainer):
     -----
     * ``comocma`` is only used for **two** objectives in upstream tests; this
       class raises if ``task_num != 2`` for :meth:`run_comocma`.
-    * ``SpectralLoRA`` in this codebase is the spectral / SVD-style modulation;
-      there is no separate ``SphericalLoRA`` class — use ``SpectralLoRA`` or
-      another strategy from ``LibMTL.evomtl.parameter_sharing``.
+    * ``SpectralLoRA`` uses SVD modulation on conv weights and LoRA on linear
+      weights; ``SpectralAllSVD`` uses SVD on both conv and linear 2D weights.
+      There is no separate ``SphericalLoRA`` class — use ``FlattenLoRAParameterSharing``
+      (``spherical_lora``) or another strategy from ``LibMTL.evomtl.parameter_sharing``.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -172,6 +262,28 @@ class EvoMTLTrainer(Trainer):
         self.ps = ps_class(self.model, **ps_kwargs)
         self.ps_scale = float(ps_scale)
 
+    def _print_and_log_moea_ps_stats(self) -> None:
+        """Print model size and MOEA latent dimensionality; add to W&B run config if enabled."""
+        if self.ps is None:
+            return
+        num_parameters = int(sum(p.numel() for p in self.model.parameters()))
+        num_dimensions = int(self.ps.num_dims)
+        print(
+            f"[EvoMTL] MOEA (parameter sharing): num_parameters={num_parameters} | "
+            f"num_dimensions={num_dimensions}",
+            flush=True,
+        )
+        if getattr(self, "_wandb_enabled", False):
+            import wandb
+
+            wandb.config.update(
+                {
+                    "evo_num_parameters": num_parameters,
+                    "evo_num_dimensions": num_dimensions,
+                },
+                allow_val_change=True,
+            )
+
     def prepare_evolution(
         self,
         ps_class: Type[Any],
@@ -180,6 +292,7 @@ class EvoMTLTrainer(Trainer):
     ) -> None:
         """Capture ``theta_0`` (if missing) and build ``ps``."""
         self.init_parameter_sharing(ps_class, ps_scale=ps_scale, **ps_kwargs)
+        self._print_and_log_moea_ps_stats()
 
     def apply_z(
         self,
@@ -290,11 +403,46 @@ class EvoMTLTrainer(Trainer):
             acc += losses.detach()
         return (acc / n).cpu().numpy()
 
+    @torch.no_grad()
+    def metrics_snapshot_from_prefetched_batches(
+        self,
+        prefetched_batches: List[Tuple[Any, Any]],
+    ) -> Dict[str, Any]:
+        """Per-task loss and meter metrics (e.g. accuracy) on the same batches as MOEA eval.
+
+        Matches :meth:`Trainer.test` with ``return_metrics=True`` layout: ``loss_item``,
+        ``results`` per task, and wall-clock ``elapsed`` for the forward pass.
+        """
+        self.model.eval()
+        self.meter.reinit()
+        self.meter.record_time("begin")
+        for inp, gts in prefetched_batches:
+            _, preds = self.forward4loss(self.model, inp, gts, return_preds=True)
+            if not self.multi_input:
+                self.meter.update(preds, gts)
+            else:
+                for task in self.task_name:
+                    self.meter.update(preds[task], gts[task], task)
+        self.meter.record_time("end")
+        self.meter.get_score()
+        metrics = {
+            "loss_item": np.copy(self.meter.loss_item),
+            "results": {
+                task: tuple(self.meter.results[task]) for task in self.task_name
+            },
+            "elapsed": float(self.meter.end_time - self.meter.beg_time),
+        }
+        self.meter.reinit()
+        return metrics
+
     def finalize_pareto_center(
         self,
         F: np.ndarray,
         X: np.ndarray,
         ref_point: Optional[np.ndarray] = None,
+        *,
+        hv_center_aggregation: str = "linear",
+        hv_softmax_temperature: float = 1.0,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Restrict to the Pareto front, compute HV weights, return ``z_center``."""
         F = np.atleast_2d(F)
@@ -302,7 +450,12 @@ class EvoMTLTrainer(Trainer):
         idx = pareto_front_indices(F)
         F_nd = F[idx]
         X_nd = X[idx]
-        w = marginal_hypervolume_weights(F_nd, ref_point=ref_point)
+        w = marginal_hypervolume_weights(
+            F_nd,
+            ref_point=ref_point,
+            aggregation=hv_center_aggregation,
+            softmax_temperature=hv_softmax_temperature,
+        )
         z_c = pareto_center_from_weights(X_nd, w)
         return z_c, w, idx
 
@@ -325,6 +478,9 @@ class EvoMTLTrainer(Trainer):
             "evo/iterations": int(iterations),
             "evo/pareto_front_size": float(len(F_pf)),
         }
+        if F.size:
+            # Mean task loss per individual, then mean over population (like train losses/avg).
+            log["evo/losses/avg"] = float(np.mean(np.mean(F, axis=1)))
         for ti, tn in enumerate(self.task_name):
             log[f"evo/{tn}/mean"] = float(np.mean(F[:, ti]))
             log[f"evo/{tn}/ideal"] = float(ideal[ti])
@@ -375,6 +531,8 @@ class EvoMTLTrainer(Trainer):
         n_eval_batches: int = 5,
         seed: int = 0,
         hv_ref_point: Optional[np.ndarray] = None,
+        hv_center_aggregation: str = "linear",
+        hv_softmax_temperature: float = 1.0,
         wandb_step_offset: int = 0,
         test_dataloaders: Optional[Any] = None,
     ) -> Dict[str, Any]:
@@ -432,19 +590,15 @@ class EvoMTLTrainer(Trainer):
             _F_pop = algorithm.pop.get("F")
             _X_pop = algorithm.pop.get("X")
             _idx_pf = pareto_front_indices(_F_pop)
-            _hv_ref = hv_ref_point if hv_ref_point is not None else _default_hv_ref_point(_F_pop[_idx_pf])
-            _w = marginal_hypervolume_weights(_F_pop[_idx_pf], ref_point=_hv_ref)
+            _w = marginal_hypervolume_weights(
+                _F_pop[_idx_pf],
+                ref_point=hv_ref_point,
+                aggregation=hv_center_aggregation,
+                softmax_temperature=hv_softmax_temperature,
+            )
             _z_c = pareto_center_from_weights(_X_pop[_idx_pf], _w)
             self.apply_z(_z_c)
-            t_ce = time.perf_counter()
-            _train_losses = self.evaluate_multiobjective_losses(
-                train_dataloaders, prefetched_batches=shared_batches
-            )
-            _train_snap = {
-                "loss_item": _train_losses,
-                "results": {task: () for task in self.task_name},
-                "elapsed": time.perf_counter() - t_ce,
-            }
+            _train_snap = self.metrics_snapshot_from_prefetched_batches(shared_batches)
             if test_dataloaders is not None:
                 _m_test = self.test(
                     test_dataloaders,
@@ -455,14 +609,13 @@ class EvoMTLTrainer(Trainer):
                     return_metrics=True,
                 )
                 self.print_compact_train_test_line(
-                    _train_snap, _m_test,
+                    _train_snap,
+                    _m_test,
                     epoch_label=gen_idx + 1,
-                    train_label_prefix="TRAIN (Pareto z, curr batch)",
-                    test_label_prefix="TEST  (Pareto z)",
                 )
             else:
                 parts = " | ".join(
-                    f"{task}: {float(_train_losses[i]):.4f}"
+                    f"{task}: {float(_train_snap['loss_item'][i]):.4f}"
                     for i, task in enumerate(self.task_name)
                 )
                 print(f"[EvoMTL] Pareto z TRAIN (curr batch) gen {gen_idx + 1:04d} | {parts}", flush=True)
@@ -474,9 +627,14 @@ class EvoMTLTrainer(Trainer):
         F_nd = F_all[idx]
         X_nd = X_all[idx]
 
+        w = marginal_hypervolume_weights(
+            F_nd,
+            ref_point=hv_ref_point,
+            aggregation=hv_center_aggregation,
+            softmax_temperature=hv_softmax_temperature,
+        )
         if hv_ref_point is None:
             hv_ref_point = _default_hv_ref_point(F_nd)
-        w = marginal_hypervolume_weights(F_nd, ref_point=hv_ref_point)
         z_center = pareto_center_from_weights(X_nd, w)
 
         self.apply_z(z_center)
@@ -490,6 +648,8 @@ class EvoMTLTrainer(Trainer):
             "hv_weights": w,
             "z_center": z_center,
             "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
+            "hv_center_aggregation": hv_center_aggregation,
+            "hv_softmax_temperature": float(hv_softmax_temperature),
             "history_F": history_F,
         }
         self.last_evo = out
@@ -504,7 +664,12 @@ class EvoMTLTrainer(Trainer):
         reference_point: Optional[List[float]] = None,
         n_eval_batches: int = 5,
         hv_ref_point: Optional[np.ndarray] = None,
+        hv_center_aggregation: str = "linear",
+        hv_softmax_temperature: float = 1.0,
         cma_opts: Optional[Dict[str, Any]] = None,
+        z_lower: float = -3.0,
+        z_upper: float = 3.0,
+        seed: int = 0,
         wandb_step_offset: int = 0,
         test_dataloaders: Optional[Any] = None,
     ) -> Dict[str, Any]:
@@ -524,6 +689,8 @@ class EvoMTLTrainer(Trainer):
                 "run_comocma requires comocma and cma. pip install comocma cma"
             ) from e
 
+        np.random.seed(int(seed))
+
         n_var = int(self.ps.num_dims)
         z0 = self.ps.z0
         if hasattr(z0, "tolist"):
@@ -533,6 +700,12 @@ class EvoMTLTrainer(Trainer):
 
         x_starts = [list(z0_list) for _ in range(int(num_kernels))]
         inopts = dict(cma_opts or {})
+        # inopts.setdefault("popsize", 24)
+        # inopts.setdefault("seed", int(seed))
+        lo, hi = float(z_lower), float(z_upper)
+        inopts.setdefault("bounds", [[lo] * n_var, [hi] * n_var])
+        # # Fixed coordinate scaling for cma (1.0 on every latent dim); not configurable.
+        # inopts["CMA_stds"] = [1.0] * n_var
         list_of_solvers = comocma.get_cmas(x_starts, sigma0, inopts=inopts)
 
         if reference_point is None:
@@ -596,19 +769,15 @@ class EvoMTLTrainer(Trainer):
 
             # --- Pareto-center evaluation on current batch + test set ---
             if len(pf_cut) > 0:
-                _hv_ref = hv_ref_point if hv_ref_point is not None else _default_hv_ref_point(pf_cut)
-                _w = marginal_hypervolume_weights(pf_cut, ref_point=_hv_ref)
+                _w = marginal_hypervolume_weights(
+                    pf_cut,
+                    ref_point=hv_ref_point,
+                    aggregation=hv_center_aggregation,
+                    softmax_temperature=hv_softmax_temperature,
+                )
                 _z_c = pareto_center_from_weights(ps_cut, _w)
                 self.apply_z(_z_c)
-                t_ce = time.perf_counter()
-                _train_losses = self.evaluate_multiobjective_losses(
-                    train_dataloaders, prefetched_batches=shared_batches
-                )
-                _train_snap = {
-                    "loss_item": _train_losses,
-                    "results": {task: () for task in self.task_name},
-                    "elapsed": time.perf_counter() - t_ce,
-                }
+                _train_snap = self.metrics_snapshot_from_prefetched_batches(shared_batches)
                 if test_dataloaders is not None:
                     _m_test = self.test(
                         test_dataloaders,
@@ -619,14 +788,13 @@ class EvoMTLTrainer(Trainer):
                         return_metrics=True,
                     )
                     self.print_compact_train_test_line(
-                        _train_snap, _m_test,
+                        _train_snap,
+                        _m_test,
                         epoch_label=it + 1,
-                        train_label_prefix="TRAIN (Pareto z, curr batch)",
-                        test_label_prefix="TEST  (Pareto z)",
                     )
                 else:
                     parts = " | ".join(
-                        f"{task}: {float(_train_losses[i]):.4f}"
+                        f"{task}: {float(_train_snap['loss_item'][i]):.4f}"
                         for i, task in enumerate(self.task_name)
                     )
                     print(f"[EvoMTL] Pareto z TRAIN (curr batch) it {it + 1:04d} | {parts}", flush=True)
@@ -636,9 +804,14 @@ class EvoMTLTrainer(Trainer):
         if len(F_nd) == 0:
             raise RuntimeError("comocma returned an empty Pareto front.")
 
+        w = marginal_hypervolume_weights(
+            F_nd,
+            ref_point=hv_ref_point,
+            aggregation=hv_center_aggregation,
+            softmax_temperature=hv_softmax_temperature,
+        )
         if hv_ref_point is None:
             hv_ref_point = _default_hv_ref_point(F_nd)
-        w = marginal_hypervolume_weights(F_nd, ref_point=hv_ref_point)
         z_center = pareto_center_from_weights(X_nd, w)
 
         self.apply_z(z_center)
@@ -650,6 +823,8 @@ class EvoMTLTrainer(Trainer):
             "hv_weights": w,
             "z_center": z_center,
             "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
+            "hv_center_aggregation": hv_center_aggregation,
+            "hv_softmax_temperature": float(hv_softmax_temperature),
             "reference_point": reference_point,
             "history_F": history_F,
         }
@@ -788,8 +963,6 @@ class EvoMTLTrainer(Trainer):
             m_train,
             m_test,
             epoch_label=post_evo_step,
-            train_label_prefix="TRAIN (Pareto z)",
-            test_label_prefix="TEST (Pareto z)",
         )
 
         if self.save_path is not None:
@@ -802,6 +975,8 @@ class EvoMTLTrainer(Trainer):
                     "pareto_X": evo_out["pareto_X"],
                     "hv_weights": evo_out["hv_weights"],
                     "hv_ref_point": evo_out["hv_ref_point"],
+                    "hv_center_aggregation": evo_out.get("hv_center_aggregation"),
+                    "hv_softmax_temperature": evo_out.get("hv_softmax_temperature"),
                     "method": evo_out["method"],
                 },
                 os.path.join(self.save_path, "evo_result.pt"),
@@ -816,6 +991,9 @@ def pareto_center_solution(
     F: np.ndarray,
     X: np.ndarray,
     ref_point: Optional[np.ndarray] = None,
+    *,
+    hv_center_aggregation: str = "linear",
+    hv_softmax_temperature: float = 1.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Utility: Pareto front + HV weights + center ``z`` (no model side effects)."""
     F = np.atleast_2d(F)
@@ -823,8 +1001,11 @@ def pareto_center_solution(
     idx = pareto_front_indices(F)
     F_nd = F[idx]
     X_nd = X[idx]
-    if ref_point is None:
-        ref_point = _default_hv_ref_point(F_nd)
-    w = marginal_hypervolume_weights(F_nd, ref_point=ref_point)
+    w = marginal_hypervolume_weights(
+        F_nd,
+        ref_point=ref_point,
+        aggregation=hv_center_aggregation,
+        softmax_temperature=hv_softmax_temperature,
+    )
     z_c = pareto_center_from_weights(X_nd, w)
     return z_c, w

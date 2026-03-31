@@ -7,12 +7,6 @@ mode: train
 seed: 1
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: evomtl-ew+comocma-seed1
-wandb_group: evomtl-ew+comocma
-
 # Architecture
 weighting: EW
 arch: HPS
@@ -25,7 +19,7 @@ dataset_path: .               # root of data/ folder (relative to examples/multi
 num_tasks: 2
 train_bs: 256
 test_bs: 10000
-epochs: 6
+epochs: 5
 
 # Optimizer (Adam)
 optim: adam
@@ -39,18 +33,41 @@ amsgrad: false
 # EvoMTL (MOEA after supervised training; COMO-CMA-ES; two tasks only)
 evo_training: true
 evo_moea: comocma
-evo_ps: spherical_lora
-evo_ps_scale: 1.0
-evo_ps_r: 4
+evo_ps: layerwise_random_proj
+evo_ps_scale: 0.001
+evo_ps_k: 128
 evo_ps_seed: 42
-evo_iterations: 10000
+evo_iterations: 200
 evo_num_kernels: 10
 evo_sigma0: 0.1
-evo_n_eval_batches: 1
+evo_n_eval_batches: 8
 evo_seed: 1
+evo_pop_size: 24
+evo_z_lower: -1.0
+evo_z_upper: 1.0
+evo_cma_tolx: 0.0
+evo_cma_tolfun: 0.0
+evo_cma_tolfunrel: 0.0
+evo_cma_tolfunhist: 0.0
+evo_cma_tolstagnation: 0
+evo_cma_tolflatfitness: 1e9
+
+# COMO-CMA reference points: [] = defaults (Sofomore: 2*probe_loss+1; pymoo HV: nadir+1e-6).
+evo_sofomore_reference_point: [3.0, 3.0]
+evo_hv_ref_point: [3.0, 3.0]
+
+evo_hv_center_aggregation: linear
+evo_hv_softmax_temperature: 1.0
+
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: evomtl-ew+comocma-rand_proj-scale0.001-neb8-seed1
+wandb_group: evomtl-ew+comocma-rand_proj
 
 # Paths
-save_path: logs/fashion/evomtl-ew_comocma/adam/seed_1/
+save_path: logs/fashion/evomtl-ew_comocma-rand_proj_fair_sigma0.1/adam/seed_1/
 load_path: null
 
 # EW-specific

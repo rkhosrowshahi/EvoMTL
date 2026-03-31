@@ -1,4 +1,6 @@
 import argparse
+from typing import Optional
+
 import numpy as np
 import torch
 
@@ -117,27 +119,69 @@ _parser.add_argument('--kgamma', type=float, default=1.0, help='gamma for DSelec
 _parser.add_argument('--evo_training', action='store_true', default=False,
                     help='after normal GD (epochs), run MOEA on parameter-sharing latent z')
 _parser.add_argument('--evo_ps', type=str, default='spherical_lora',
-                    help='random_proj, flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora')
+                    help='random_proj, layerwise_random_proj, layerwise_scaled_random_proj, flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora, spectral_all_svd')
 _parser.add_argument('--evo_moea', type=str, default='nsga2',
                     help='nsga2 or comocma (two tasks only for comocma)')
 _parser.add_argument('--evo_ps_scale', type=float, default=1.0,
                     help='scale for theta = theta_0 + ps_scale * ps(z)')
 _parser.add_argument('--evo_ps_r', type=int, default=4,
-                    help='rank r for LoRA-style parameter sharing (ignored for random_proj)')
+                    help='rank r for LoRA-style parameter sharing (ignored for random_proj and layerwise_random_proj)')
 _parser.add_argument('--evo_ps_k', type=int, default=64,
-                    help='latent dimension k for random_proj only')
+                    help='random_proj (k+1 dims with scale), layerwise_random_proj (k per projected tensor), and layerwise_scaled_random_proj (k+1 per projected tensor)')
 _parser.add_argument('--evo_ps_seed', type=int, default=42, help='seed for parameter sharing')
 _parser.add_argument('--evo_iterations', type=int, default=30,
                     help='MOEA outer iterations: NSGA-II generations or COMO-CMA-ES iterations')
-_parser.add_argument('--evo_pop_size', type=int, default=24, help='NSGA-II population size')
-_parser.add_argument('--evo_z_lower', type=float, default=-3.0, help='NSGA-II box lower for z')
-_parser.add_argument('--evo_z_upper', type=float, default=3.0, help='NSGA-II box upper for z')
+_parser.add_argument('--evo_pop_size', type=int, default=24, help='MOEA population size (NSGA-II; COMO-CMA popsize)')
+_parser.add_argument('--evo_z_lower', type=float, default=-3.0, help='box lower for latent z (NSGA-II; COMO-CMA bounds)')
+_parser.add_argument('--evo_z_upper', type=float, default=3.0, help='box upper for latent z (NSGA-II; COMO-CMA bounds)')
 _parser.add_argument('--evo_n_eval_batches', type=int, default=1,
                     help='train batches per MOEA fitness evaluation')
-_parser.add_argument('--evo_seed', type=int, default=0, help='NSGA-II random seed')
+_parser.add_argument('--evo_seed', type=int, default=0, help='MOEA random seed (NSGA-II; CMA seed for comocma)')
 _parser.add_argument('--evo_num_kernels', type=int, default=10,
                     help='number of comocma kernels / Pareto points')
 _parser.add_argument('--evo_sigma0', type=float, default=0.3, help='initial CMA step size')
+_parser.add_argument('--evo_cma_tolx', type=float, default=None,
+                    help='COMO-CMA CMA tolx (omit for comocma kernel default)')
+_parser.add_argument('--evo_cma_tolfun', type=float, default=None,
+                    help='COMO-CMA CMA tolfun')
+_parser.add_argument('--evo_cma_tolfunrel', type=float, default=None,
+                    help='COMO-CMA CMA tolfunrel')
+_parser.add_argument('--evo_cma_tolfunhist', type=float, default=None,
+                    help='COMO-CMA CMA tolfunhist')
+_parser.add_argument('--evo_cma_tolstagnation', type=float, default=None,
+                    help='COMO-CMA CMA tolstagnation (0 disables)')
+_parser.add_argument('--evo_cma_tolflatfitness', type=float, default=None,
+                    help='COMO-CMA CMA tolflatfitness')
+_parser.add_argument(
+    '--evo_sofomore_reference_point',
+    nargs='*',
+    type=float,
+    default=None,
+    help='Sofomore COMO-CMA reference point [f0, f1] (minimization). '
+         'Omit or use empty list for auto: 2*probe_loss+1 per task.',
+)
+_parser.add_argument(
+    '--evo_hv_ref_point',
+    nargs='*',
+    type=float,
+    default=None,
+    help='pymoo HV reference for marginal HV weights (two tasks). '
+         'Omit or use empty list for auto: nadir of Pareto front + 1e-6.',
+)
+_parser.add_argument(
+    '--evo_hv_center_aggregation',
+    type=str,
+    default='linear',
+    choices=('linear', 'softmax'),
+    help='Pareto center: linear = normalize marginal HV contributions; '
+         'softmax = temperature-scaled softmax of contributions.',
+)
+_parser.add_argument(
+    '--evo_hv_softmax_temperature',
+    type=float,
+    default=1.0,
+    help='Temperature for evo_hv_center_aggregation=softmax (larger = softer weights).',
+)
 
 LibMTL_args = _parser
 
@@ -338,6 +382,40 @@ def _make_wandb_init(params, kwargs, optim_param, scheduler_param):
     return out
 
 
+def _make_comocma_cma_opts(params):
+    """Options passed to ``comocma.get_cmas(..., inopts=...)`` (merged with comocma defaults)."""
+    o = {
+        'popsize': int(params.evo_pop_size),
+        'seed': int(params.evo_seed),
+    }
+    if getattr(params, 'evo_cma_tolx', None) is not None:
+        o['tolx'] = float(params.evo_cma_tolx)
+    if getattr(params, 'evo_cma_tolfun', None) is not None:
+        o['tolfun'] = float(params.evo_cma_tolfun)
+    if getattr(params, 'evo_cma_tolfunrel', None) is not None:
+        o['tolfunrel'] = float(params.evo_cma_tolfunrel)
+    if getattr(params, 'evo_cma_tolfunhist', None) is not None:
+        o['tolfunhist'] = float(params.evo_cma_tolfunhist)
+    if getattr(params, 'evo_cma_tolstagnation', None) is not None:
+        o['tolstagnation'] = float(params.evo_cma_tolstagnation)
+    if getattr(params, 'evo_cma_tolflatfitness', None) is not None:
+        o['tolflatfitness'] = float(params.evo_cma_tolflatfitness)
+    return o
+
+
+def _evo_two_floats_or_none(seq) -> Optional[np.ndarray]:
+    """Parse ``--evo_*`` with ``nargs='*'``: None/empty -> None; two floats -> array."""
+    if seq is None:
+        return None
+    if len(seq) == 0:
+        return None
+    if len(seq) != 2:
+        raise ValueError(
+            'Expected exactly two objectives for reference point, got {!r}'.format(seq)
+        )
+    return np.asarray([float(seq[0]), float(seq[1])], dtype=np.float64)
+
+
 def _make_evo_args(params):
     """Build ``evo_args`` for :meth:`LibMTL.trainer.Trainer.train` (no ``**kwargs``)."""
     if not getattr(params, 'evo_training', False):
@@ -347,10 +425,17 @@ def _make_evo_args(params):
     ps_key = params.evo_ps.strip().lower().replace('-', '_')
 
     ps_kwargs = {'seed': params.evo_ps_seed}
-    if ps_key == 'random_proj':
+    if ps_key in ('random_proj', 'layerwise_random_proj'):
         ps_kwargs['k'] = params.evo_ps_k
     else:
         ps_kwargs['r'] = params.evo_ps_r
+
+    hv_agg = getattr(params, 'evo_hv_center_aggregation', 'linear')
+    hv_temp = float(getattr(params, 'evo_hv_softmax_temperature', 1.0))
+    hv_common = {
+        'hv_center_aggregation': str(hv_agg).strip().lower(),
+        'hv_softmax_temperature': hv_temp,
+    }
 
     if moea == 'nsga2':
         evo_kwargs = {
@@ -360,14 +445,29 @@ def _make_evo_args(params):
             'z_upper': params.evo_z_upper,
             'n_eval_batches': params.evo_n_eval_batches,
             'seed': params.evo_seed,
+            **hv_common,
         }
+        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        if hv is not None:
+            evo_kwargs['hv_ref_point'] = hv
     elif moea in ('comocma', 'mocma', 'mo-cma-es'):
         evo_kwargs = {
             'n_iterations': params.evo_iterations,
             'num_kernels': params.evo_num_kernels,
             'sigma0': params.evo_sigma0,
             'n_eval_batches': params.evo_n_eval_batches,
+            'z_lower': params.evo_z_lower,
+            'z_upper': params.evo_z_upper,
+            'seed': params.evo_seed,
+            'cma_opts': _make_comocma_cma_opts(params),
+            **hv_common,
         }
+        rp = _evo_two_floats_or_none(getattr(params, 'evo_sofomore_reference_point', None))
+        if rp is not None:
+            evo_kwargs['reference_point'] = [float(rp[0]), float(rp[1])]
+        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        if hv is not None:
+            evo_kwargs['hv_ref_point'] = hv
     else:
         raise ValueError('Unsupported evo_moea {}'.format(params.evo_moea))
 

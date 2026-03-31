@@ -178,12 +178,12 @@ class Trainer(nn.Module):
         self.meter.reinit()
         self.model.train()
 
-    def _wandb_log_epoch_metrics(self, step: int, mode: str, *, final: bool = False) -> None:
+    def _wandb_log_epoch_metrics(self, step: int, mode: str) -> None:
         if not self._wandb_enabled:
             return
         import wandb
 
-        prefix = f"{mode}/final" if final else mode
+        prefix = mode
 
         log: Dict[str, Any] = {}
         for tn, task in enumerate(self.task_name):
@@ -541,15 +541,13 @@ class Trainer(nn.Module):
         if self._wandb_enabled:
             if epoch is not None:
                 wb_step = int(epoch)
-                final = False
             elif wandb_log_step is not None:
                 wb_step = int(wandb_log_step)
-                final = mode == "test"
             else:
                 raise ValueError(
                     "wandb_log_step is required when epoch is None and wandb is enabled."
                 )
-            self._wandb_log_epoch_metrics(wb_step, mode, final=final)
+            self._wandb_log_epoch_metrics(wb_step, mode)
         improvement = self.meter.improvement
         self.meter.reinit()
         if return_improvement:

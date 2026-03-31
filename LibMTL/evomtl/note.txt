@@ -1,0 +1,42 @@
+Set-Location c:\Users\rasar\Documents\Projects\EvoMTL; python -c "
+import torch.nn as nn, numpy as np
+from LibMTL.evomtl.parameter_sharing import LayerwiseRandomProjectionParameterSharing
+
+class MultiLeNetEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
+        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+        self.conv2_drop = nn.Dropout2d()
+        self.fc = nn.Linear(320, 50)
+
+class MultiLeNetDecoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(50, 50)
+        self.fc2 = nn.Linear(50, 10)
+
+class FakeHPS(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder  = MultiLeNetEncoder()
+        self.decoders = nn.ModuleDict({'L': MultiLeNetDecoder(), 'R': MultiLeNetDecoder()})
+
+m = FakeHPS()
+print('Tensor inventory:')
+for name, p in m.named_parameters():
+    sz = p.numel()
+    tag = 'direct' if name.endswith('.bias') else 'proj'
+    print('  %-45s  numel=%6d  %s' % (name, sz, tag))
+
+print()
+print('%-6s  %-8s  %-22s  %-26s  %-8s' % ('k', 'z_enc', 'z_dec_L / z_dec_R', 'z_biases(direct)', 'z_total'))
+print('-' * 80)
+for k in [16, 64, 128, 256, 512, 1024]:
+    ps = LayerwiseRandomProjectionParameterSharing(m, k=k, device='cpu', seed=42)
+    enc_k = sum(i['k'] for i in ps.layer_info if i['section']=='encoder' and i['type']=='proj')
+    dL_k  = sum(i['k'] for i in ps.layer_info if i['section']=='decoder_L' and i['type']=='proj')
+    dR_k  = sum(i['k'] for i in ps.layer_info if i['section']=='decoder_R' and i['type']=='proj')
+    bias  = sum(i['n'] for i in ps.layer_info if i['type']=='direct')
+    print('%-6d  %-8d  %-10d / %-10d  %-26d  %-8d' % (k, enc_k, dL_k, dR_k, bias, ps.num_dims))
+" 2>&1 | Select-String -NotMatch "LayerwiseRandomProj:"
