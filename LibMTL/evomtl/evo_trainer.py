@@ -23,6 +23,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import numpy as np
+from numpy.random import pareto
 import torch
 import torch.nn as nn
 
@@ -470,27 +471,24 @@ class EvoMTLTrainer(Trainer):
     def _wandb_log_evo_front_metrics(
         self,
         iterations: int,
-        F: np.ndarray,
+        pareto_front: np.ndarray,
         step: int,
         extras: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log one MOEA step under ``evo/`` (shared keys for NSGA-II and COMO-CMA-ES)."""
         if not getattr(self, "_wandb_enabled", False):
             return
-        F = np.atleast_2d(np.asarray(F, dtype=np.float64))
-        ideal = np.min(F, axis=0)
-        idx_pf = pareto_front_indices(F)
-        F_pf = F[idx_pf]
-        nadir = np.max(F_pf, axis=0) if len(F_pf) else np.max(F, axis=0)
+        pareto_front = np.atleast_2d(np.asarray(pareto_front, dtype=np.float64))
+        ideal = np.min(pareto_front, axis=0)
+        nadir = np.max(pareto_front, axis=0) if len(pareto_front) else np.max(pareto_front, axis=0)
         log: Dict[str, Any] = {
             "evo/iterations": int(iterations),
-            "evo/pareto_front_size": float(len(F_pf)),
+            "evo/pareto_front_size": float(len(pareto_front)),
         }
-        if F.size:
-            # Mean task loss per individual, then mean over population (like train losses/avg).
-            log["evo/losses/avg"] = float(np.mean(np.mean(F, axis=1)))
+        # Mean task loss per individual, then mean over population (like train losses/avg).
+        log["evo/losses/avg"] = float(np.mean(np.mean(pareto_front, axis=1)))
         for ti, tn in enumerate(self.task_name):
-            log[f"evo/{tn}/mean"] = float(np.mean(F[:, ti]))
+            log[f"evo/{tn}/mean"] = float(np.mean(pareto_front[:, ti]))
             log[f"evo/{tn}/ideal"] = float(ideal[ti])
             log[f"evo/{tn}/nadir"] = float(nadir[ti])
         if extras:
@@ -502,31 +500,54 @@ class EvoMTLTrainer(Trainer):
         phase: str,
         step: int,
         n_steps: int,
-        F: np.ndarray,
+        pareto_front: np.ndarray,
         extras: Optional[str] = None,
         elapsed: Optional[float] = None,
-        pareto_front_size: Optional[int] = None,
+        offspring_X: Optional[np.ndarray] = None,
+        wandb_log_step: Optional[int] = None,
     ) -> None:
         """Print one MOEA step to stdout (mirrors :meth:`_wandb_log_evo_front_metrics`)."""
-        F = np.atleast_2d(np.asarray(F, dtype=np.float64))
-        if pareto_front_size is None:
-            pareto_front_size = len(pareto_front_indices(F))
+        pareto_front_size = len(pareto_front)
+        line = (
+            f"[EvoMTL] {phase} {step + 1:04d}/{int(n_steps):04d}"
+            + " | "
+            + f"PF size={pareto_front_size}"
+        )
+
+        if offspring_X is not None:
+            X = np.atleast_2d(np.asarray(offspring_X, dtype=np.float64))
+            if X.size:
+                z_min = float(np.min(X))
+                z_max = float(np.max(X))
+                z_mean = float(np.mean(X))
+                z_norm = float(np.linalg.norm(X))
+                line += (
+                    f" | offspring z min={z_min:.6f} max={z_max:.6f} "
+                    f"mean={z_mean:.6f} norm={z_norm:.6f}"
+                )
+                if getattr(self, "_wandb_enabled", False) and wandb_log_step is not None:
+                    prefix = f"evo/offspring"
+                    self._wandb_log(
+                        {
+                            f"{prefix}/min": z_min,
+                            f"{prefix}/max": z_max,
+                            f"{prefix}/mean": z_mean,
+                            f"{prefix}/norm": z_norm,
+                        },
+                        step=wandb_log_step,
+                    )
+        if extras:
+            line += f" | {extras}"
+        if elapsed is not None:
+            line += f" | Time: {elapsed:.4f} | "
         parts = []
         for ti, tn in enumerate(self.task_name):
-            col = F[:, ti]
+            col = pareto_front[:, ti]
             parts.append(
                 f"{tn} mean={float(np.mean(col)):.4f} "
                 f"min={float(np.min(col)):.4f} max={float(np.max(col)):.4f}"
             )
-        line = (
-            f"[EvoMTL] {phase} {step + 1:04d}/{int(n_steps):04d} | "
-            + " | ".join(parts)
-            + f" | pareto_front={pareto_front_size}"
-        )
-        if extras:
-            line += f" | {extras}"
-        if elapsed is not None:
-            line += f" | Time: {elapsed:.4f}"
+        line += " | ".join(parts)
         print(line, flush=True)
 
     def run_nsga2(
@@ -602,7 +623,13 @@ class EvoMTLTrainer(Trainer):
 
             elapsed = time.perf_counter() - t0
             self._print_evo_progress(
-                "NSGA-II iteration", gen_idx, n_gen, pareto_front, elapsed=elapsed
+                "NSGA-II iteration",
+                gen_idx,
+                n_gen,
+                pareto_front,
+                elapsed=elapsed,
+                offspring_X=offspring_X,
+                wandb_log_step=wandb_step_offset + gen_idx,
             )
             self._wandb_log_evo_front_metrics(
                 gen_idx, pareto_front, wandb_step_offset + gen_idx
@@ -738,6 +765,7 @@ class EvoMTLTrainer(Trainer):
         for it in range(n_iterations):
             t0 = time.perf_counter()
             solutions = moes.ask("all")
+            solutions_X = np.asarray(solutions, dtype=np.float64)
             shared_batches = self._sample_eval_batches(train_dataloaders, n_eval_batches)
             objs = []
             for x in solutions:
@@ -747,40 +775,40 @@ class EvoMTLTrainer(Trainer):
                 )
                 objs.append([float(L[0]), float(L[1])])
             moes.tell(solutions, objs)
-            objs_arr = np.asarray(objs, dtype=np.float64)
+            # objs_arr = np.asarray(objs, dtype=np.float64)
+            pf_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
+            ps_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
 
             elapsed = time.perf_counter() - t0
             extras = None
             extras_print = None
-            pf_n = len(moes.pareto_front_cut)
+            pf_n = len(pf_cut)
             if moes.kernels:
                 sig = float(np.mean([float(k.sigma) for k in moes.kernels]))
                 extras = {
                     "evo/comocma/sigma_mean": sig,
-                    "evo/comocma/pareto_front_size": float(pf_n),
                 }
                 extras_print = f"sigma_mean={sig:.4f}"
             else:
-                extras = {"evo/comocma/pareto_front_size": float(pf_n)}
                 extras_print = None
             self._print_evo_progress(
                 "COMO-CMA",
                 it,
                 n_iterations,
-                objs_arr,
+                pf_cut,
                 extras=extras_print,
                 elapsed=elapsed,
-                pareto_front_size=pf_n,
+                offspring_X=solutions_X,
+                wandb_log_step=wandb_step_offset + it,
             )
-            pf_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
-            ps_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
-            if len(pf_cut) > 0:
-                self.print_pareto_front_objective_stats(
-                    pf_cut,
-                    line_label="Pareto front (ref cut)",
-                )
+            
+            # if len(pf_cut) > 0:
+            #     self.print_pareto_front_objective_stats(
+            #         pf_cut,
+            #         line_label="Pareto front (ref cut)",
+            #     )
             self._wandb_log_evo_front_metrics(
-                it, objs_arr, wandb_step_offset + it, extras=extras
+                it, pf_cut, wandb_step_offset + it, extras=extras
             )
 
             # --- Pareto-center evaluation on current batch + test set ---
@@ -815,27 +843,27 @@ class EvoMTLTrainer(Trainer):
                     )
                     print(f"[EvoMTL] Pareto z TRAIN (curr batch) it {it + 1:04d} | {parts}", flush=True)
 
-        F_nd = np.asarray(moes.pareto_front_cut, dtype=np.float64)
-        X_nd = np.asarray(moes.pareto_set_cut, dtype=np.float64)
-        if len(F_nd) == 0:
+        pf_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
+        ps_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
+        if len(pf_cut) == 0:
             raise RuntimeError("comocma returned an empty Pareto front.")
 
         w = marginal_hypervolume_weights(
-            F_nd,
+            pf_cut,
             ref_point=hv_ref_point,
             aggregation=hv_center_aggregation,
             softmax_temperature=hv_softmax_temperature,
         )
         if hv_ref_point is None:
-            hv_ref_point = _default_hv_ref_point(F_nd)
-        z_center = pareto_center_from_weights(X_nd, w)
+            hv_ref_point = _default_hv_ref_point(pf_cut)
+        z_center = pareto_center_from_weights(ps_cut, w)
 
         self.apply_z(z_center)
         out = {
             "method": "COMO-CMA-ES",
             "moes": moes,
-            "pareto_F": F_nd,
-            "pareto_X": X_nd,
+            "pareto_F": pf_cut,
+            "pareto_X": ps_cut,
             "hv_weights": w,
             "z_center": z_center,
             "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
