@@ -554,51 +554,62 @@ class EvoMTLTrainer(Trainer):
             xl=xl,
             xu=xu,
         )
-        algorithm = NSGA2(pop_size=pop_size)
-        algorithm.setup(problem, termination=NoTermination(), seed=seed, verbose=False)
-        np.random.seed(seed)
-
-        history_F: List[np.ndarray] = []
+        from pymoo.operators.crossover.sbx import SBX
+        from pymoo.operators.mutation.pm import PM
+        algorithm = NSGA2(
+            pop_size=pop_size,
+            crossover=SBX(eta=10, prob=0.9),
+            mutation=PM(eta=10, prob=0.9),
+            seed=seed,
+            verbose=False,
+        )
+        algorithm.setup(problem, termination=NoTermination())
 
         n_gen = int(n_gen)
         for gen_idx in range(n_gen):
             t0 = time.perf_counter()
-            pop = algorithm.ask()
-            X = pop.get("X")
+            
             shared_batches = self._sample_eval_batches(train_dataloaders, n_eval_batches)
-            F_list = []
-            for i in range(len(X)):
-                self.apply_z(X[i])
-                F_list.append(
-                    self.evaluate_multiobjective_losses(
-                        train_dataloaders, prefetched_batches=shared_batches
-                    )
+            if algorithm.pop is not None:
+                pop_F = algorithm.pop.get("F")
+                pop_X = algorithm.pop.get("X")
+                for i in range(len(pop_X)):
+                    self.apply_z(pop_X[i])
+                    pop_F[i] = self.evaluate_multiobjective_losses(
+                            train_dataloaders, prefetched_batches=shared_batches
+                        )
+                algorithm.pop.set("F", pop_F)
+            offspring = algorithm.ask()
+            offspring_X = offspring.get("X")
+            offspring_F = np.zeros((len(offspring_X), self.task_num))
+            for i in range(len(offspring_X)):
+                self.apply_z(offspring_X[i])
+                offspring_F[i] = self.evaluate_multiobjective_losses(
+                    train_dataloaders, prefetched_batches=shared_batches
                 )
-            F = np.stack(F_list, axis=0)
-            static = StaticProblem(problem, F=F)
-            Evaluator().eval(static, pop)
-            algorithm.tell(infills=pop)
-            history_F.append(F.copy())
+            static = StaticProblem(problem, F=offspring_F)
+            Evaluator().eval(static, offspring)
+            algorithm.tell(infills=offspring)
+            result = algorithm.result()
+            pareto_front = result.opt.get("F")
+            pareto_set = result.opt.get("X")
 
             elapsed = time.perf_counter() - t0
             self._print_evo_progress(
-                "NSGA-II gen", gen_idx, n_gen, F, elapsed=elapsed
+                "NSGA-II iteration", gen_idx, n_gen, pareto_front, elapsed=elapsed
             )
             self._wandb_log_evo_front_metrics(
-                gen_idx, F, wandb_step_offset + gen_idx
+                gen_idx, pareto_front, wandb_step_offset + gen_idx
             )
 
             # --- Pareto-center evaluation on current batch + test set ---
-            _F_pop = algorithm.pop.get("F")
-            _X_pop = algorithm.pop.get("X")
-            _idx_pf = pareto_front_indices(_F_pop)
             _w = marginal_hypervolume_weights(
-                _F_pop[_idx_pf],
+                pareto_front,
                 ref_point=hv_ref_point,
                 aggregation=hv_center_aggregation,
                 softmax_temperature=hv_softmax_temperature,
             )
-            _z_c = pareto_center_from_weights(_X_pop[_idx_pf], _w)
+            _z_c = pareto_center_from_weights(pareto_set, _w)
             self.apply_z(_z_c)
             _train_snap = self.metrics_snapshot_from_prefetched_batches(shared_batches)
             if test_dataloaders is not None:
@@ -652,7 +663,6 @@ class EvoMTLTrainer(Trainer):
             "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
             "hv_center_aggregation": hv_center_aggregation,
             "hv_softmax_temperature": float(hv_softmax_temperature),
-            "history_F": history_F,
         }
         self.last_evo = out
         return out
@@ -717,7 +727,6 @@ class EvoMTLTrainer(Trainer):
             reference_point = [float(probe[0] * 2 + 1.0), float(probe[1] * 2 + 1.0)]
 
         moes = comocma.Sofomore(list_of_solvers, reference_point)
-        history_F: List[np.ndarray] = []
 
         n_iterations = int(n_iterations)
         for it in range(n_iterations):
@@ -733,7 +742,6 @@ class EvoMTLTrainer(Trainer):
                 objs.append([float(L[0]), float(L[1])])
             moes.tell(solutions, objs)
             objs_arr = np.asarray(objs, dtype=np.float64)
-            history_F.append(objs_arr.copy())
 
             elapsed = time.perf_counter() - t0
             extras = None
@@ -828,7 +836,6 @@ class EvoMTLTrainer(Trainer):
             "hv_center_aggregation": hv_center_aggregation,
             "hv_softmax_temperature": float(hv_softmax_temperature),
             "reference_point": reference_point,
-            "history_F": history_F,
         }
         self.last_evo = out
         return out

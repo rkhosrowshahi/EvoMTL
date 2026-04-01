@@ -19,7 +19,7 @@ dataset_path: .               # root of data/ folder (relative to examples/multi
 num_tasks: 2
 train_bs: 256
 test_bs: 10000
-epochs: 5
+epochs: 30
 
 # Optimizer (Adam)
 optim: adam
@@ -35,7 +35,7 @@ evo_training: true
 evo_moea: comocma
 evo_ps: layerwise_random_blocking
 evo_ps_scale: 1.0
-evo_ps_k: 1024
+evo_ps_k: 128
 evo_ps_seed: 42
 evo_iterations: 100
 evo_num_kernels: 10
@@ -43,8 +43,8 @@ evo_sigma0: 0.001
 evo_n_eval_batches: 1
 evo_seed: 1
 evo_pop_size: 24
-evo_z_lower: -1.0
-evo_z_upper: 1.0
+evo_z_lower: -10.0
+evo_z_upper: 10.0
 evo_cma_tolx: 0.0
 evo_cma_tolfun: 0.0
 evo_cma_tolfunrel: 0.0
