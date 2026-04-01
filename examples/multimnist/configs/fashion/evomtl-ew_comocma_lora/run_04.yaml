@@ -33,18 +33,18 @@ amsgrad: false
 # EvoMTL (MOEA after supervised training; COMO-CMA-ES; two tasks only)
 evo_training: true
 evo_moea: comocma
-evo_ps: layerwise_scaled_random_proj
-evo_ps_alpha: 1.0
-evo_ps_k: 128
+evo_ps: flatten_lora
+evo_ps_alpha: 0.001
+evo_ps_r: 16
 evo_ps_seed: 42
 evo_iterations: 100
 evo_num_kernels: 10
-evo_sigma0: 0.001
+evo_sigma0: 0.1
 evo_n_eval_batches: 1
 evo_seed: 1
 evo_pop_size: 24
-evo_z_lower: -1.0
-evo_z_upper: 1.0
+evo_z_lower: -10.0
+evo_z_upper: 10.0
 evo_cma_tolx: 0.0
 evo_cma_tolfun: 0.0
 evo_cma_tolfunrel: 0.0
@@ -63,11 +63,11 @@ evo_hv_softmax_temperature: 1.0
 # Weights & Biases
 wandb_entity: rasa_research
 wandb_project: mtl
-wandb_name: evomtl-ew+comocma-rand_proj-seed1
-wandb_group: evomtl-ew+comocma-rand_proj
+wandb_name: evomtl-ew+comocma-lora-seed1
+wandb_group: evomtl-ew+comocma-lora
 
 # Paths
-save_path: logs/fashion/evomtl-ew_comocma-rand_proj/adam/seed_1/
+save_path: logs/fashion/evomtl-ew_comocma-lora/adam/seed_1/
 load_path: null
 
 # EW-specific

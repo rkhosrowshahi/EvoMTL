@@ -89,8 +89,8 @@ def main(params):
                        'loss_fn': CELoss(),
                        'weight': [1]}}
     elif params.num_tasks == 3:
-        train_multimnist = MultiMNISTDataset3Digits(root=params.dataset_path, dataset='mnist', train=True, transform=transform, download=False)
-        test_multimnist = MultiMNISTDataset3Digits(root=params.dataset_path, dataset='mnist', train=False, transform=transform, download=False)
+        train_multimnist = MultiMNISTDataset3Digits(root=params.dataset_path, dataset='mnist', train=True, transform=transform, download=True)
+        test_multimnist = MultiMNISTDataset3Digits(root=params.dataset_path, dataset='mnist', train=False, transform=transform, download=True)
         task_dict = {'top-left': {'metrics': ['Acc'],
                         'metrics_fn': AccMetric(),
                        'loss_fn': CELoss(),

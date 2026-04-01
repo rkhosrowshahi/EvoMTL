@@ -56,10 +56,10 @@ class RandomProjection:
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
-    def forward(self, z):
+    def forward(self, z, alpha=1.0):
         """Full forward: z -> expand -> process -> theta."""
         x = self.expand(z)
-        return self.process(x)
+        return self.process(x, alpha=alpha)
 
 
 class LayerwiseRandomProjection:
@@ -176,10 +176,10 @@ class LayerwiseRandomProjection:
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
-    def forward(self, z):
+    def forward(self, z, alpha=1.0):
         """Full forward: z -> expand -> process -> theta."""
         x = self.expand(z)
-        return self.process(x)
+        return self.process(x, alpha=alpha)
 
 
 class LayerwiseRandomBlocking:
@@ -312,10 +312,10 @@ class LayerwiseRandomBlocking:
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
-    def forward(self, z):
+    def forward(self, z, alpha=1.0):
         """Full forward: z -> expand -> process -> theta."""
         x = self.expand(z)
-        return self.process(x)
+        return self.process(x, alpha=alpha)
 
 
 class LayerwiseScaledRandomProjection:
@@ -442,10 +442,10 @@ class LayerwiseScaledRandomProjection:
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
-    def forward(self, z):
+    def forward(self, z, alpha=1.0):
         """Full forward: z -> expand -> process -> theta."""
         x = self.expand(z)
-        return self.process(x)
+        return self.process(x, alpha=alpha)
 
 
 
@@ -583,10 +583,10 @@ class FlattenLoRA:
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
-    def forward(self, z):
+    def forward(self, z, alpha=1.0):
         """Full forward pass."""
         x = self.expand(z)
-        return self.process(x)
+        return self.process(x, alpha=alpha)
 
 
 class DictLoRA:
@@ -748,10 +748,10 @@ class DictLoRA:
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
-    def forward(self, z):
+    def forward(self, z, alpha=1.0):
         """Full forward: returns delta to be added to base_params."""
         x = self.expand(z)
-        return self.process(x)
+        return self.process(x, alpha=alpha)
 
 
 def _build_param_module_map(model):
@@ -874,8 +874,8 @@ class LinearOnlyLoRA:
             parameters = torch.from_numpy(parameters).to(self.device).float()
         torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
 
-    def forward(self, z):
-        return self.process(self.expand(z))
+    def forward(self, z, alpha=1.0):
+        return self.process(self.expand(z), alpha=alpha)
 
 
 class ModulationLoRA:
@@ -1019,8 +1019,8 @@ class ModulationLoRA:
             parameters = torch.from_numpy(parameters).to(self.device).float()
         torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
 
-    def forward(self, z):
-        return self.process(self.expand(z))
+    def forward(self, z, alpha=1.0):
+        return self.process(self.expand(z), alpha=alpha)
 
 
 class SpectralLoRA:
@@ -1178,8 +1178,8 @@ class SpectralLoRA:
             parameters = torch.from_numpy(parameters).to(self.device).float()
         torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
 
-    def forward(self, z):
-        return self.process(self.expand(z))
+    def forward(self, z, alpha=1.0):
+        return self.process(self.expand(z), alpha=alpha)
 
 
 class SpectralAllSVD:
@@ -1327,5 +1327,5 @@ class SpectralAllSVD:
             parameters = torch.from_numpy(parameters).to(self.device).float()
         torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
 
-    def forward(self, z):
-        return self.process(self.expand(z))
+    def forward(self, z, alpha=1.0):
+        return self.process(self.expand(z), alpha=alpha)

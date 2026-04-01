@@ -34,7 +34,7 @@ amsgrad: false
 evo_training: true
 evo_moea: nsga2
 evo_ps: layerwise_random_proj
-evo_ps_scale: 0.1
+evo_ps_alpha: 0.1
 evo_ps_k: 128
 evo_ps_seed: 42
 evo_iterations: 100

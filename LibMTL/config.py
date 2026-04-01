@@ -122,8 +122,8 @@ _parser.add_argument('--evo_ps', type=str, default='spherical_lora',
                     help='random_proj, layerwise_random_proj, layerwise_scaled_random_proj, flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora, spectral_all_svd')
 _parser.add_argument('--evo_moea', type=str, default='nsga2',
                     help='nsga2 or comocma (two tasks only for comocma)')
-_parser.add_argument('--evo_ps_scale', type=float, default=1.0,
-                    help='scale for theta = theta_0 + ps_scale * ps(z)')
+_parser.add_argument('--evo_ps_alpha', type=float, default=1.0,
+                    help='alpha scaling delta_theta in ps.forward(z, alpha); theta = theta_0 + ps.forward(z, alpha=evo_ps_alpha)')
 _parser.add_argument('--evo_ps_r', type=int, default=4,
                     help='rank r for LoRA-style parameter sharing (ignored for random_proj and layerwise_random_proj)')
 _parser.add_argument('--evo_ps_k', type=int, default=64,
@@ -480,7 +480,7 @@ def _make_evo_args(params):
         'evo_training': True,
         'evo_ps': params.evo_ps,
         'moea': params.evo_moea,
-        'ps_scale': params.evo_ps_scale,
+        'ps_alpha': params.evo_ps_alpha,
         'ps_kwargs': ps_kwargs,
         'evo_kwargs': evo_kwargs,
     }
@@ -522,7 +522,7 @@ def _display(params, kwargs, optim_param, scheduler_param):
     evo = kwargs.get('evo_args') or {}
     if evo.get('evo_training'):
         print('EvoMTL Configuration:')
-        for k in ('evo_ps', 'moea', 'ps_scale'):
+        for k in ('evo_ps', 'moea', 'ps_alpha'):
             if k in evo:
                 print('\t'+k+':', evo[k])
         print('\t(save_path for GD + EvoMTL):', params.save_path)

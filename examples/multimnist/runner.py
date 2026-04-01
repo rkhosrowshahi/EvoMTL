@@ -5,16 +5,17 @@ Usage
     python runner.py --dir configs/mnist/cagrad/
     python runner.py --dir configs/mnist/cagrad/ --gpu_id 1
     python runner.py --dir configs/fashion/famo/ --dry_run
-    python runner.py --dir configs/mnist/cagrad/ --from seed123
-    python runner.py --dir configs/mnist/cagrad/ --from seed123.yaml
+    python runner.py --dir configs/mnist/cagrad/ --from my_run
+    python runner.py --dir configs/mnist/cagrad/ --from my_run.yaml
     python runner.py --dir configs/mnist/cagrad/ --from_index 3
 
 Any extra flags are forwarded verbatim to ``main.py`` and will override the
 corresponding YAML values.
 
-The YAMLs are processed in natural (seed-number) order.  Use ``--from`` to skip
-configs before a given file, or ``--from_index N`` (1-based) to start at the
-Nth config in that order.  A summary table is printed at the end.
+All ``*.yaml`` and ``*.yml`` files in the directory are processed in
+**alphabetical** order by filename.  Use ``--from`` to skip configs before a
+given file, or ``--from_index N`` (1-based) to start at the Nth config in that
+order.  A summary table is printed at the end.
 """
 
 import argparse
@@ -24,17 +25,10 @@ import time
 from pathlib import Path
 
 
-def natural_sort_key(p: Path):
-    """Sort seed1 < seed12 < seed123 numerically."""
-    import re
-    parts = re.split(r'(\d+)', p.stem)
-    return [int(c) if c.isdigit() else c for c in parts]
-
-
 def slice_from(yamls: list, start: str) -> list:
     """Return configs from ``start`` onward (inclusive). ``start`` is a stem or filename."""
     start = start.strip()
-    if not start.endswith('.yaml'):
+    if not start.endswith(('.yaml', '.yml')):
         start_name = f'{start}.yaml'
     else:
         start_name = start
@@ -55,10 +49,10 @@ def parse_args():
         epilog=__doc__,
     )
     parser.add_argument('--dir', required=True, type=str,
-                        help='directory that contains seed*.yaml files')
+                        help='directory containing *.yaml / *.yml configs')
     start = parser.add_mutually_exclusive_group()
     start.add_argument('--from', dest='start_from', default=None, metavar='NAME',
-                       help='resume: skip configs before this file (e.g. seed123 or seed123.yaml)')
+                       help='resume: skip configs before this file (stem or full name, e.g. run_b or run_b.yaml)')
     start.add_argument('--from_index', dest='start_from_index', type=int, default=None,
                        metavar='N',
                        help='resume: 1-based index in sorted order (e.g. 3 = third YAML)')
@@ -76,9 +70,12 @@ def main():
     if not folder.is_dir():
         sys.exit(f'[runner] ERROR: "{folder}" is not a directory.')
 
-    yamls = sorted(folder.glob('*.yaml'), key=natural_sort_key)
+    yamls = sorted(
+        list(folder.glob('*.yaml')) + list(folder.glob('*.yml')),
+        key=lambda p: p.name,
+    )
     if not yamls:
-        sys.exit(f'[runner] ERROR: no *.yaml files found in "{folder}".')
+        sys.exit(f'[runner] ERROR: no *.yaml or *.yml files found in "{folder}".')
 
     total_in_folder = len(yamls)
     if args.start_from_index is not None:

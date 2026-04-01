@@ -360,7 +360,7 @@ class Trainer(nn.Module):
                 moea=evo_args['moea'],
                 evo_kwargs=dict(evo_args['evo_kwargs']),
                 ps_kwargs=dict(evo_args['ps_kwargs']),
-                ps_scale=evo_args['ps_scale'],
+                ps_alpha=evo_args['ps_alpha'],
                 val_dataloaders=val_dataloaders,
                 finish_wandb=finish_wandb,
             )

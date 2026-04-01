@@ -154,7 +154,7 @@ def _evo_block_nsga2(seed: int) -> str:
 evo_training: true
 evo_moea: nsga2
 evo_ps: spherical_lora
-evo_ps_scale: 1.0
+evo_ps_alpha: 1.0
 evo_ps_r: 4
 evo_ps_seed: 42
 evo_iterations: 30
@@ -174,7 +174,7 @@ def _evo_block_comocma(seed: int) -> str:
 evo_training: true
 evo_moea: comocma
 evo_ps: spectral_all_svd
-evo_ps_scale: 1.0
+evo_ps_alpha: 1.0
 evo_ps_r: 4
 evo_ps_seed: 42
 evo_iterations: 30

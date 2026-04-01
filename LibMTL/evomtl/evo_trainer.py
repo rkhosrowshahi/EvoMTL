@@ -3,7 +3,9 @@
 Workflow:
 1. Gradient-descent warmup (reuse :meth:`Trainer.train`).
 2. Snapshot ``theta_0`` and build a parameter-sharing map ``ps`` so that
-   ``theta = theta_0 + ps_scale * ps(z)`` (same convention as in ``parameter_sharing``).
+   ``theta = theta_0 + ps(z, alpha=evo_ps_alpha)`` (``alpha`` scales ``delta_theta``
+   inside :meth:`~LibMTL.evomtl.parameter_sharing` ``process``; config ``evo_ps_alpha``
+   maps to :attr:`ps_alpha` on the trainer).
 3. Run NSGA-II (pymoo) or COMO-CMA-ES / MO-CMA-ES (comocma) with an ask-and-tell loop.
 4. Form a *Pareto-center* latent vector by averaging Pareto-set points weighted by
    marginal hypervolume contribution, apply it, then evaluate train and test (same
@@ -238,7 +240,7 @@ class EvoMTLTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.theta_0: Optional[torch.Tensor] = None
         self.ps: Any = None
-        self.ps_scale: float = 1.0
+        self.ps_alpha: float = 1.0
         self.last_evo: Dict[str, Any] = {}
 
     def capture_base_parameters(self) -> None:
@@ -248,7 +250,7 @@ class EvoMTLTrainer(Trainer):
     def init_parameter_sharing(
         self,
         ps_class: Type[Any],
-        ps_scale: float = 1.0,
+        ps_alpha: float = 1.0,
         capture_if_needed: bool = True,
         **ps_kwargs: Any,
     ) -> None:
@@ -262,7 +264,7 @@ class EvoMTLTrainer(Trainer):
         ps_kwargs = dict(ps_kwargs)
         ps_kwargs.setdefault("device", str(self.device))
         self.ps = ps_class(self.model, **ps_kwargs)
-        self.ps_scale = float(ps_scale)
+        self.ps_alpha = float(ps_alpha)
 
     def _print_and_log_moea_ps_stats(self) -> None:
         """Print model size and MOEA latent dimensionality; add to W&B run config if enabled."""
@@ -289,27 +291,31 @@ class EvoMTLTrainer(Trainer):
     def prepare_evolution(
         self,
         ps_class: Type[Any],
-        ps_scale: float = 1.0,
+        ps_alpha: float = 1.0,
         **ps_kwargs: Any,
     ) -> None:
         """Capture ``theta_0`` (if missing) and build ``ps``."""
-        self.init_parameter_sharing(ps_class, ps_scale=ps_scale, **ps_kwargs)
+        self.init_parameter_sharing(ps_class, ps_alpha=ps_alpha, **ps_kwargs)
         self._print_and_log_moea_ps_stats()
 
     def apply_z(
         self,
         z: Union[np.ndarray, List[float], torch.Tensor],
-        ps_scale: Optional[float] = None,
+        ps_alpha: Optional[float] = None,
     ) -> None:
-        """Set model weights to ``theta_0 + ps_scale * ps(z)``."""
+        """Set model weights to ``theta_0 + ps.forward(z, alpha=ps_alpha)``.
+
+        ``alpha`` (``evo_ps_alpha`` / :attr:`ps_alpha`) scales ``delta_theta`` in
+        each strategy's :meth:`~LibMTL.evomtl.parameter_sharing` ``process``.
+        """
         if self.theta_0 is None:
             raise RuntimeError("Call capture_base_parameters() before apply_z().")
         if self.ps is None:
             raise RuntimeError("Call init_parameter_sharing() before apply_z().")
 
-        scale = self.ps_scale if ps_scale is None else float(ps_scale)
+        alpha = self.ps_alpha if ps_alpha is None else float(ps_alpha)
         z_np = np.asarray(z, dtype=np.float64).reshape(-1)
-        delta = self.ps.forward(z_np)
+        delta = self.ps.forward(z_np, alpha=alpha)
         if not isinstance(delta, torch.Tensor):
             delta = torch.as_tensor(
                 np.asarray(delta, dtype=np.float32),
@@ -318,7 +324,7 @@ class EvoMTLTrainer(Trainer):
             )
         else:
             delta = delta.to(self.device).float()
-        full = self.theta_0 + scale * delta.reshape_as(self.theta_0)
+        full = self.theta_0 + delta.reshape_as(self.theta_0)
         nn.utils.vector_to_parameters(full, self.model.parameters())
 
     def restore_base_parameters(self) -> None:
@@ -874,7 +880,7 @@ class EvoMTLTrainer(Trainer):
         moea: str = "nsga2",
         evo_kwargs: Optional[Dict[str, Any]] = None,
         ps_kwargs: Optional[Dict[str, Any]] = None,
-        ps_scale: float = 1.0,
+        ps_alpha: float = 1.0,
         val_dataloaders: Any = None,
         finish_wandb: bool = True,
     ) -> Dict[str, Any]:
@@ -919,7 +925,7 @@ class EvoMTLTrainer(Trainer):
             flush=True,
         )
 
-        self.prepare_evolution(ps_class, ps_scale=ps_scale, **ps_kwargs)
+        self.prepare_evolution(ps_class, ps_alpha=ps_alpha, **ps_kwargs)
 
         if moea_key == "nsga2":
             n_outer = int(evo_kwargs.get("n_gen", 0))

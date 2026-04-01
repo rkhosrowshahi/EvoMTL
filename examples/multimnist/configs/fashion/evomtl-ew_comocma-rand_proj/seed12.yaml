@@ -34,7 +34,7 @@ amsgrad: false
 evo_training: true
 evo_moea: comocma
 evo_ps: layerwise_scaled_random_proj
-evo_ps_scale: 1.0
+evo_ps_alpha: 1.0
 evo_ps_k: 128
 evo_ps_seed: 42
 evo_iterations: 100
