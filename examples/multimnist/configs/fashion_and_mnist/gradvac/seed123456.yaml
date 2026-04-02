@@ -1,0 +1,45 @@
+# GradVac – Gradient Vaccine
+# Wang et al., ICLR 2021
+# Improves multi-task optimisation by encouraging gradient alignment between tasks.
+
+# General
+mode: train
+seed: 123456
+gpu_id: "0"
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: gradvac-seed123456
+wandb_group: gradvac
+
+# Architecture
+weighting: GradVac
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion_and_mnist
+dataset_path: .               # root of data/ folder (relative to examples/multimnist/)
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 100
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-3
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+# Paths
+save_path: logs/fashion_and_mnist/gradvac/adam/seed_123456/
+load_path: null
+
+# GradVac-specific
+GradVac_beta: 0.5          # EMA coefficient for cosine similarity tracking
+GradVac_group_type: 0      # parameter granularity: 0=whole_model | 1=all_layer | 2=all_matrix
