@@ -9,6 +9,7 @@ gpu_id: "0"
 
 # Architecture
 weighting: EW
+# EW — no LibMTL weight_args (equal task weights)
 arch: HPS
 rep_grad: false
 multi_input: false
@@ -23,7 +24,7 @@ epochs: 30
 
 # Optimizer (Adam)
 optim: adam
-lr: 1.0e-3
+lr: 1.0e-4
 weight_decay: 5.0e-4
 adam_beta1: 0.9
 adam_beta2: 0.999
@@ -69,6 +70,3 @@ wandb_group: evomtl-ew+comocma-rand_proj
 # Paths
 save_path: logs/fashion/evomtl-ew_comocma-rand_proj/adam/seed_12/
 load_path: null
-
-# EW-specific
-# EW has no algorithm-specific hyperparameters.

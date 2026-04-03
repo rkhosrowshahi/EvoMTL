@@ -1,0 +1,42 @@
+# MGDA – Multiple Gradient Descent Algorithm
+# Sener & Koltun, NeurIPS 2018
+# Solves the MOO problem exactly by projecting onto the minimum-norm point of the gradient convex hull.
+
+# General
+mode: train
+seed: 123456
+gpu_id: "0"
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl-mgda-loss
+wandb_name: mgda_loss-seed123456
+wandb_group: mgda_loss
+
+# Architecture
+weighting: MGDA
+mgda_gn: loss          # gradient normalisation: none | l2 | loss | loss+
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion
+dataset_path: .               # root of data/ folder (relative to examples/multimnist/)
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 100
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-4
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+# Paths
+save_path: logs/fashion/mgda_loss/adam/seed_123456/
+load_path: null

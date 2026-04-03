@@ -1,0 +1,45 @@
+# FORUM – First-order multi-gradient for bi-level MTL
+# ECAI 2024
+# First-order multi-gradient steps for bi-level multi-task learning.
+
+# General
+mode: train
+seed: 123456
+gpu_id: "0"
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: forum-seed123456
+wandb_group: forum
+
+# Architecture
+weighting: FORUM
+outer_lr: 1.0e-3        # outer LR (LibMTL default)
+inner_lr: 0.1           # inner SGD on shared parameters (LibMTL default)
+inner_step: 5           # inner refinement steps (LibMTL default)
+FORUM_phi: 0.1          # mixing coefficient φ (LibMTL default)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .               # root of data/ folder (relative to examples/multimnist/)
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 100
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-4
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+# Paths
+save_path: logs/mnist/forum/adam/seed_123456/
+load_path: null

@@ -1,0 +1,46 @@
+# FAMO – Fast Adaptive Multitask Optimisation
+# Liu et al., NeurIPS 2023
+# Maintains per-task loss weights that converge to a balanced Pareto solution in O(1) memory.
+
+# General
+mode: train
+seed: 12345
+gpu_id: "0"
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: famo-seed12345
+wandb_group: famo
+
+# Architecture
+weighting: FAMO
+FAMO_w_lr: 0.025       # learning rate for the per-task weight update
+FAMO_w_gamma: 1.0e-3   # L2 regularisation on task weights (prevents weight collapse)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion_and_mnist
+dataset_path: .               # root of data/ folder (relative to examples/multimnist/)
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 100
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-3
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+scheduler: cos
+eta_min: 1.0e-6
+
+# Paths
+save_path: logs/fashion_and_mnist/famo/adam/seed_12345/
+load_path: null

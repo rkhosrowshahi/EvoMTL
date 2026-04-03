@@ -15,6 +15,7 @@ wandb_group: aligned_mtl
 
 # Architecture
 weighting: Aligned_MTL
+# Aligned_MTL — no LibMTL weight_args
 arch: HPS
 rep_grad: false
 multi_input: false
@@ -29,7 +30,7 @@ epochs: 100
 
 # Optimizer (Adam)
 optim: adam
-lr: 1.0e-3
+lr: 1.0e-4
 weight_decay: 5.0e-4
 adam_beta1: 0.9
 adam_beta2: 0.999
@@ -39,6 +40,3 @@ amsgrad: false
 # Paths
 save_path: logs/mnist/aligned_mtl/adam/seed_123/
 load_path: null
-
-# Aligned_MTL-specific
-# Aligned_MTL has no algorithm-specific hyperparameters.

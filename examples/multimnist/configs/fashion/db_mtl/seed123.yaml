@@ -1,0 +1,43 @@
+# DB_MTL – Dual-buffer gradient aggregation
+# LibMTL (see LibMTL.weighting.DB_MTL)
+# Maintains per-task gradient buffers with step-weighted mixing; rep_grad must be false.
+
+# General
+mode: train
+seed: 123
+gpu_id: "0"
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: db_mtl-seed123
+wandb_group: db_mtl
+
+# Architecture
+weighting: DB_MTL
+DB_beta: 0.9            # mixing strength toward the new batch gradient (LibMTL default)
+DB_beta_sigma: 0      # exponent on 1/step in the mixing coefficient (LibMTL default)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion
+dataset_path: .               # root of data/ folder (relative to examples/multimnist/)
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 100
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-4
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+# Paths
+save_path: logs/fashion/db_mtl/adam/seed_123/
+load_path: null

@@ -178,7 +178,13 @@ class Trainer(nn.Module):
         self.meter.reinit()
         self.model.train()
 
-    def _wandb_log_epoch_metrics(self, step: int, mode: str) -> None:
+    def _wandb_log_epoch_metrics(
+        self,
+        step: int,
+        mode: str,
+        *,
+        train_batches_per_epoch: Optional[int] = None,
+    ) -> None:
         if not self._wandb_enabled:
             return
         import wandb
@@ -186,6 +192,7 @@ class Trainer(nn.Module):
         prefix = mode
 
         log: Dict[str, Any] = {}
+        log[f"{prefix}/epoch"] = float(step)
         for tn, task in enumerate(self.task_name):
             log[f"{prefix}/{task}/loss"] = float(self.meter.loss_item[tn])
             metric_names = self.task_dict[task]["metrics"]
@@ -194,6 +201,11 @@ class Trainer(nn.Module):
         log[f"{prefix}/time"] = float(self.meter.end_time - self.meter.beg_time)
         if mode == "train":
             log[f"{prefix}/lr"] = float(self.optimizer.param_groups[0]["lr"])
+            if train_batches_per_epoch is not None and train_batches_per_epoch > 0:
+                # Global optimizer-step index (0-based) at end of this epoch.
+                log[f"{prefix}/iteration"] = float(
+                    (step + 1) * train_batches_per_epoch - 1
+                )
 
         # Aggregate across tasks: mean loss, mean metric, hypervolume over metric vector
         losses = [float(self.meter.loss_item[tn]) for tn in range(len(self.task_name))]
@@ -434,7 +446,9 @@ class Trainer(nn.Module):
             self.meter.get_score()
             self.model.train_loss_buffer[:, epoch] = self.meter.loss_item
             self.meter.display(epoch=epoch, mode='train')
-            self._wandb_log_epoch_metrics(epoch, "train")
+            self._wandb_log_epoch_metrics(
+                epoch, "train", train_batches_per_epoch=train_batch
+            )
             self.meter.reinit()
             
             if val_dataloaders is not None:
@@ -673,7 +687,9 @@ class Trainer(nn.Module):
             self.meter.get_score()
             self.model.train_loss_buffer[:, epoch] = self.meter.loss_item
             self.meter.display(epoch=epoch, mode='train')
-            self._wandb_log_epoch_metrics(epoch, "train")
+            self._wandb_log_epoch_metrics(
+                epoch, "train", train_batches_per_epoch=train_batch
+            )
             self.meter.reinit()
             
             if val_dataloaders is not None:

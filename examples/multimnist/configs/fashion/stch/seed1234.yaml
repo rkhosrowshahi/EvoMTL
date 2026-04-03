@@ -1,0 +1,43 @@
+# STCH – Smooth Tchebycheff Scalarization for Multi-Objective Optimization
+# Xi et al., ICML 2024
+# Smooth Tchebycheff scalarization for multi-task learning (warmup then STCH objective).
+
+# General
+mode: train
+seed: 1234
+gpu_id: "0"
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: stch-seed1234
+wandb_group: stch
+
+# Architecture
+weighting: STCH
+STCH_mu: 1.0              # μ smoothing parameter (LibMTL default)
+STCH_warmup_epoch: 4      # epochs of log-loss sum before switching to STCH
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion
+dataset_path: .               # root of data/ folder (relative to examples/multimnist/)
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 100
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-4
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+# Paths
+save_path: logs/fashion/stch/adam/seed_1234/
+load_path: null

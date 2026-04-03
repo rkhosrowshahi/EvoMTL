@@ -61,7 +61,7 @@ ALGORITHMS = {
         "EW – Equal Weighting (baseline)",
         "Kendall et al., CVPR 2018",
         "Assigns equal weight to all task losses; serves as the standard MTL baseline.",
-        "# EW has no algorithm-specific hyperparameters.",
+        "# EW — no LibMTL weight_args (equal task weights)",
     ),
     "MGDA": (
         "MGDA – Multiple Gradient Descent Algorithm",
@@ -73,7 +73,7 @@ ALGORITHMS = {
         "PCGrad – Projecting Conflicting Gradients",
         "Yu et al., NeurIPS 2020",
         "Projects each task gradient onto the normal plane of conflicting task gradients.",
-        "# PCGrad has no algorithm-specific hyperparameters.",
+        "# PCGrad — no LibMTL weight_args",
     ),
     "GradVac": (
         "GradVac – Gradient Vaccine",
@@ -101,7 +101,7 @@ ALGORITHMS = {
         "IMTL – Impartial Multi-Task Learning",
         "Liu et al., ICLR 2021",
         "Achieves impartiality by equalising the projected gradient magnitudes across tasks.",
-        "# IMTL has no algorithm-specific hyperparameters.",
+        "# IMTL — no LibMTL weight_args",
     ),
     "MoCo": (
         "MoCo – Multi-Objective Continual Learning via Online Optimisation",
@@ -117,7 +117,13 @@ ALGORITHMS = {
         "Aligned_MTL – Aligned Multi-Task Learning",
         "Senushkin et al., CVPR 2023",
         "Aligns task gradients in a common subspace to prevent destructive interference.",
-        "# Aligned_MTL has no algorithm-specific hyperparameters.",
+        "# Aligned_MTL — no LibMTL weight_args",
+    ),
+    "ExcessMTL": (
+        "ExcessMTL – Robust Multi-Task Learning with Excess Risks",
+        "He et al., ICML 2024",
+        "Task weights from accumulated squared gradients; scaled by robust_step_size.",
+        "robust_step_size: 1.0e-2   # step size for the robust weight update (LibMTL default)",
     ),
     "FairGrad": (
         "FairGrad – Fair Gradient Descent for Multi-Task Learning",
@@ -139,12 +145,57 @@ ALGORITHMS = {
         "MoDo_gamma: 1.0e-3   # dual-variable step size\n"
         "MoDo_rho: 0.1        # proximal regularisation coefficient",
     ),
+    "DB_MTL": (
+        "DB_MTL – Dual-buffer gradient aggregation",
+        "LibMTL (see LibMTL.weighting.DB_MTL)",
+        "Maintains per-task gradient buffers with step-weighted mixing; rep_grad must be false.",
+        "DB_beta: 0.9            # mixing strength toward the new batch gradient (LibMTL default)\n"
+        "DB_beta_sigma: 0      # exponent on 1/step in the mixing coefficient (LibMTL default)",
+    ),
     "SDMGrad": (
         "SDMGrad – Stochastic Direction-oriented Multitask Gradient",
         "Chen et al., ICML 2023",
         "Uses random direction-oriented gradient aggregation to approximate the Pareto front.",
         "SDMGrad_lamda: 0.3     # mixing coefficient between the two sampled gradient directions\n"
         "SDMGrad_niter: 20      # inner iterations to solve the direction-finding QP",
+    ),
+    "UPGrad": (
+        "UPGrad – Unconflicting Projection of Gradients",
+        "Rey & Quinton; TorchJD (see LibMTL.weighting.UPGrad)",
+        "Aggregates task gradients via a QP that enforces non-negative weights and reduces conflict.",
+        "UPGrad_norm_eps: 0.0001   # epsilon when normalising gradients\n"
+        "UPGrad_reg_eps: 0.0001    # diagonal regulariser on the Gram matrix",
+    ),
+    "STCH": (
+        "STCH – Smooth Tchebycheff Scalarization for Multi-Objective Optimization",
+        "Xi et al., ICML 2024",
+        "Smooth Tchebycheff scalarization for multi-task learning (warmup then STCH objective).",
+        "STCH_mu: 1.0              # μ smoothing parameter (LibMTL default)\n"
+        "STCH_warmup_epoch: 4      # epochs of log-loss sum before switching to STCH",
+    ),
+    "MOML": (
+        "MOML – Multi-Objective Meta Learning",
+        "Ye et al.; NeurIPS 2021 / AIJ 2024",
+        "Bilevel optimisation of task weights; this LibMTL build supports inner_step=1 only.",
+        "outer_lr: 1.0e-3        # outer-loop LR for task weights (LibMTL default)\n"
+        "inner_lr: 0.1           # inner LL step (LibMTL default)\n"
+        "inner_step: 1           # required (fast MOML implementation in LibMTL)",
+    ),
+    "FORUM": (
+        "FORUM – First-order multi-gradient for bi-level MTL",
+        "ECAI 2024",
+        "First-order multi-gradient steps for bi-level multi-task learning.",
+        "outer_lr: 1.0e-3        # outer LR (LibMTL default)\n"
+        "inner_lr: 0.1           # inner SGD on shared parameters (LibMTL default)\n"
+        "inner_step: 5           # inner refinement steps (LibMTL default)\n"
+        "FORUM_phi: 0.1          # mixing coefficient φ (LibMTL default)",
+    ),
+    "AutoLambda": (
+        "AutoLambda – Disentangling dynamic task relationships",
+        "Liu et al., TMLR 2022",
+        "Meta-learns task weights via approximate hypergradient; inner_step must be 1 in LibMTL.",
+        "outer_lr: 1.0e-3        # meta LR for task weights (LibMTL default)\n"
+        "inner_step: 1           # required for this LibMTL implementation",
     ),
 }
 
@@ -216,6 +267,7 @@ def _template(
     evo_block: str = "",
 ) -> str:
     save_path = f"logs/{dataset_key}/{moo_segment}/{optim}/seed_{seed}/"
+    extra_block = extra.rstrip() + "\n"
     return f"""\
 # {title}
 # {ref}
@@ -234,7 +286,7 @@ wandb_group: {wandb_group}
 
 # Architecture
 weighting: {weighting}
-arch: HPS
+{extra_block}arch: HPS
 rep_grad: false
 multi_input: false
 
@@ -248,7 +300,7 @@ epochs: 100
 
 # Optimizer (Adam)
 optim: {optim}
-lr: 1.0e-3
+lr: 1.0e-4
 weight_decay: 5.0e-4
 adam_beta1: 0.9
 adam_beta2: 0.999
@@ -258,9 +310,6 @@ amsgrad: false
 # Paths
 save_path: {save_path}
 load_path: null
-
-# {weighting}-specific
-{extra}
 """
 
 

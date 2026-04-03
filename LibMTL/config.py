@@ -47,6 +47,7 @@ _parser.add_argument('--scheduler', type=str, #default='step',
                     help='learning rate scheduler for training, option: step, cos, exp')
 _parser.add_argument('--step_size', type=int, default=100, help='step size for StepLR')
 _parser.add_argument('--gamma', type=float, default=0.5, help='gamma for StepLR')
+_parser.add_argument('--eta_min', type=float, default=0.0, help='minimum lr for CosineAnnealingLR (scheduler=cos)')
 
 # args for weighting
 ## DWA
@@ -315,6 +316,10 @@ def prepare_args(params):
         if params.scheduler in ['step', 'cos', 'exp']:
             if params.scheduler == 'step':
                 scheduler_param = {'scheduler': 'step', 'step_size': params.step_size, 'gamma': params.gamma}
+            if params.scheduler == 'cos':
+                scheduler_param = {'scheduler': 'cos', 'T_max': params.epochs, 'eta_min': params.eta_min}
+            if params.scheduler == 'exp':
+                scheduler_param = {'scheduler': 'exp', 'gamma': params.gamma}
         else:
             raise ValueError('No support scheduler method {}'.format(params.scheduler))
     else:
