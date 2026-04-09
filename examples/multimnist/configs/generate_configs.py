@@ -204,16 +204,21 @@ def _evo_block_nsga2(seed: int) -> str:
 # EvoMTL (MOEA after supervised training; NSGA-II)
 evo_training: true
 evo_moea: nsga2
-evo_ps: spherical_lora
-evo_ps_alpha: 1.0
-evo_ps_r: 4
-evo_ps_seed: 42
+evo_adapter: spherical_lora
+evo_adapter_alpha: 1.0
+evo_adapter_r: 4
+evo_adapter_seed: 42
 evo_iterations: 30
 evo_pop_size: 24
-evo_z_lower: -3.0
-evo_z_upper: 3.0
-evo_n_eval_batches: 1
+evo_lb: -3.0
+evo_ub: 3.0
+evo_eval_freq: 1
+evo_num_batches: 1
 evo_seed: {seed}
+evo_crossover_prob: 0.9
+evo_crossover_eta: 10.0
+evo_mutation_prob: 0.9
+evo_mutation_eta: 10.0
 evo_hv_center_aggregation: linear
 evo_hv_softmax_temperature: 1.0
 """
@@ -224,17 +229,18 @@ def _evo_block_comocma(seed: int) -> str:
 # EvoMTL (MOEA after supervised training; COMO-CMA-ES; two tasks only)
 evo_training: true
 evo_moea: comocma
-evo_ps: spectral_all_svd
-evo_ps_alpha: 1.0
-evo_ps_r: 4
-evo_ps_seed: 42
+evo_adapter: spectral_all_svd
+evo_adapter_alpha: 1.0
+evo_adapter_r: 4
+evo_adapter_seed: 42
 evo_iterations: 30
 evo_pop_size: 24
-evo_z_lower: -1.0
-evo_z_upper: 1.0
-evo_num_kernels: 10
-evo_sigma0: 0.3
-evo_n_eval_batches: 1
+evo_lb: -1.0
+evo_ub: 1.0
+evo_eval_freq: 1
+evo_cma_num_kernels: 10
+evo_cma_sigma0: 0.3
+evo_num_batches: 1
 evo_seed: {seed}
 evo_cma_tolx: 0.0
 evo_cma_tolfun: 0.0

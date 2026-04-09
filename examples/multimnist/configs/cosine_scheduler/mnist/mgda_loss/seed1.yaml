@@ -9,7 +9,7 @@ gpu_id: "0"
 
 # Weights & Biases
 wandb_entity: rasa_research
-wandb_project: mtl-mgda-loss
+wandb_project: mtl
 wandb_name: mgda_loss-seed1
 wandb_group: mgda_loss
 

@@ -118,29 +118,127 @@ _parser.add_argument('--kgamma', type=float, default=1.0, help='gamma for DSelec
 
 # EvoMTL (MOEA on parameter sharing; use :class:`LibMTL.evomtl.evo_trainer.EvoMTLTrainer`)
 _parser.add_argument('--evo_training', action='store_true', default=False,
-                    help='after normal GD (epochs), run MOEA on parameter-sharing latent z')
-_parser.add_argument('--evo_ps', type=str, default='spherical_lora',
-                    help='random_proj, layerwise_random_proj, layerwise_scaled_random_proj, flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora, spectral_all_svd')
+                    help='enable EvoMTL; phase order set by --evo_schedule (default: GD then MOEA)')
+_parser.add_argument(
+    '--evo_schedule',
+    type=str,
+    default='gd_then_moea',
+    choices=('gd_then_moea', 'moea_then_gd'),
+    help='gd_then_moea: run --epochs of GD then MOEA (default). '
+         'moea_then_gd: MOEA on initial weights (--evo_iterations) then --epochs of full-parameter GD.',
+)
+_parser.add_argument(
+    '--evo_adapter',
+    type=str,
+    default='spherical_lora',
+    help='EvoMTL parameter-sharing adapter: random_proj, layerwise_random_proj, layerwise_scaled_random_proj, '
+         'flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora, spectral_all_svd',
+)
 _parser.add_argument('--evo_moea', type=str, default='nsga2',
-                    help='nsga2 or comocma (two tasks only for comocma)')
-_parser.add_argument('--evo_ps_alpha', type=float, default=1.0,
-                    help='alpha scaling delta_theta in ps.forward(z, alpha); theta = theta_0 + ps.forward(z, alpha=evo_ps_alpha)')
-_parser.add_argument('--evo_ps_r', type=int, default=4,
-                    help='rank r for LoRA-style parameter sharing (ignored for random_proj and layerwise_random_proj)')
-_parser.add_argument('--evo_ps_k', type=int, default=64,
-                    help='random_proj (k+1 dims with scale), layerwise_random_proj (k per projected tensor), and layerwise_scaled_random_proj (k+1 per projected tensor)')
-_parser.add_argument('--evo_ps_seed', type=int, default=42, help='seed for parameter sharing')
+                    help='nsga2, mopso (MOPSO-CD in pymoo), or comocma (two tasks only for comocma)')
+_parser.add_argument(
+    '--evo_adapter_alpha',
+    type=float,
+    default=1.0,
+    help='alpha scaling delta_theta in adapter.forward(z, alpha); theta = theta_0 + adapter.forward(z, alpha=evo_adapter_alpha)',
+)
+_parser.add_argument(
+    '--evo_adapter_r',
+    type=int,
+    default=4,
+    help='rank r for LoRA-style adapter (ignored for random_proj and layerwise_random_proj)',
+)
+_parser.add_argument(
+    '--evo_adapter_k',
+    type=int,
+    default=64,
+    help='random_proj (k+1 dims with scale), layerwise_random_proj (k per projected tensor), '
+         'and layerwise_scaled_random_proj (k+1 per projected tensor)',
+)
+_parser.add_argument(
+    '--evo_adapter_seed',
+    type=int,
+    default=42,
+    help='random seed for the parameter-sharing adapter',
+)
 _parser.add_argument('--evo_iterations', type=int, default=30,
-                    help='MOEA outer iterations: NSGA-II generations or COMO-CMA-ES iterations')
-_parser.add_argument('--evo_pop_size', type=int, default=24, help='MOEA population size (NSGA-II; COMO-CMA popsize)')
-_parser.add_argument('--evo_z_lower', type=float, default=-3.0, help='box lower for latent z (NSGA-II; COMO-CMA bounds)')
-_parser.add_argument('--evo_z_upper', type=float, default=3.0, help='box upper for latent z (NSGA-II; COMO-CMA bounds)')
-_parser.add_argument('--evo_n_eval_batches', type=int, default=1,
+                    help='MOEA outer iterations: NSGA-II / MOPSO-CD generations or COMO-CMA-ES iterations')
+_parser.add_argument('--evo_pop_size', type=int, default=24,
+                    help='MOEA population size (NSGA-II; MOPSO-CD; COMO-CMA popsize)')
+_parser.add_argument('--evo_lb', type=float, default=-3.0, help='box lower for latent z (pymoo MOEAs; COMO-CMA bounds)')
+_parser.add_argument('--evo_ub', type=float, default=3.0, help='box upper for latent z (pymoo MOEAs; COMO-CMA bounds)')
+_parser.add_argument('--evo_num_batches', type=int, default=1,
                     help='train batches per MOEA fitness evaluation')
-_parser.add_argument('--evo_seed', type=int, default=0, help='MOEA random seed (NSGA-II; CMA seed for comocma)')
-_parser.add_argument('--evo_num_kernels', type=int, default=10,
-                    help='number of comocma kernels / Pareto points')
-_parser.add_argument('--evo_sigma0', type=float, default=0.3, help='initial CMA step size')
+_parser.add_argument(
+    '--evo_eval_freq',
+    type=int,
+    default=1,
+    help='during MOEA, run full test set every N generations/iterations (pymoo MOEAs/COMO-CMA); '
+         '1=every step. Also runs on the last step. 0=skip test during MOEA (train snapshot only).',
+)
+_parser.add_argument('--evo_seed', type=int, default=0, help='MOEA random seed (pymoo MOEAs; CMA seed for comocma)')
+_parser.add_argument(
+    '--evo_crossover_prob',
+    type=float,
+    default=0.9,
+    help='NSGA-II SBX crossover probability (pymoo SBX prob)',
+)
+_parser.add_argument(
+    '--evo_crossover_eta',
+    type=float,
+    default=10.0,
+    help='NSGA-II SBX distribution index eta (pymoo SBX eta)',
+)
+_parser.add_argument(
+    '--evo_mutation_prob',
+    type=float,
+    default=0.9,
+    help='NSGA-II polynomial mutation probability (pymoo PM prob)',
+)
+_parser.add_argument(
+    '--evo_mutation_eta',
+    type=float,
+    default=10.0,
+    help='NSGA-II polynomial mutation distribution index eta (pymoo PM eta)',
+)
+_parser.add_argument(
+    '--evo_mopso_w',
+    type=float,
+    default=0.6,
+    help='MOPSO-CD inertia weight w (pymoo MOPSO_CD; evo_moea=mopso)',
+)
+_parser.add_argument(
+    '--evo_mopso_c1',
+    type=float,
+    default=2.0,
+    help='MOPSO-CD cognitive coefficient c1 (pymoo MOPSO_CD)',
+)
+_parser.add_argument(
+    '--evo_mopso_c2',
+    type=float,
+    default=2.0,
+    help='MOPSO-CD social coefficient c2 (pymoo MOPSO_CD)',
+)
+_parser.add_argument(
+    '--evo_mopso_max_velocity_rate',
+    type=float,
+    default=0.5,
+    help='MOPSO-CD max velocity as fraction of box width (pymoo max_velocity_rate)',
+)
+_parser.add_argument(
+    '--evo_mopso_archive_size',
+    type=int,
+    default=200,
+    help='MOPSO-CD external archive size (pymoo archive_size)',
+)
+_parser.add_argument('--evo_cma_num_kernels', type=int, default=10,
+                    help='COMO-CMA: number of kernels / Pareto points')
+_parser.add_argument(
+    '--evo_cma_sigma0',
+    type=float,
+    default=0.3,
+    help='COMO-CMA: initial CMA step size (sigma0)',
+)
 _parser.add_argument('--evo_cma_tolx', type=float, default=None,
                     help='COMO-CMA CMA tolx (omit for comocma kernel default)')
 _parser.add_argument('--evo_cma_tolfun', type=float, default=None,
@@ -427,18 +525,18 @@ def _make_evo_args(params):
         return {'evo_training': False}
 
     moea = params.evo_moea.strip().lower()
-    ps_key = params.evo_ps.strip().lower().replace('-', '_')
+    adapter_key = params.evo_adapter.strip().lower().replace('-', '_')
 
-    ps_kwargs = {'seed': params.evo_ps_seed}
-    if ps_key in (
+    adapter_kwargs = {'seed': params.evo_adapter_seed}
+    if adapter_key in (
         'random_proj',
         'layerwise_random_proj',
         'layerwise_random_blocking',
         'layerwise_scaled_random_proj',
     ):
-        ps_kwargs['k'] = params.evo_ps_k
+        adapter_kwargs['k'] = params.evo_adapter_k
     else:
-        ps_kwargs['r'] = params.evo_ps_r
+        adapter_kwargs['r'] = params.evo_adapter_r
 
     hv_agg = getattr(params, 'evo_hv_center_aggregation', 'linear')
     hv_temp = float(getattr(params, 'evo_hv_softmax_temperature', 1.0))
@@ -447,14 +545,40 @@ def _make_evo_args(params):
         'hv_softmax_temperature': hv_temp,
     }
 
+    evo_eval_freq = int(getattr(params, 'evo_eval_freq', 1))
+
     if moea == 'nsga2':
         evo_kwargs = {
-            'n_gen': params.evo_iterations,
+            'num_iterations': params.evo_iterations,
             'pop_size': params.evo_pop_size,
-            'z_lower': params.evo_z_lower,
-            'z_upper': params.evo_z_upper,
-            'n_eval_batches': params.evo_n_eval_batches,
+            'lb': params.evo_lb,
+            'ub': params.evo_ub,
+            'num_batches': params.evo_num_batches,
             'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'crossover_prob': float(params.evo_crossover_prob),
+            'crossover_eta': float(params.evo_crossover_eta),
+            'mutation_prob': float(params.evo_mutation_prob),
+            'mutation_eta': float(params.evo_mutation_eta),
+            **hv_common,
+        }
+        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        if hv is not None:
+            evo_kwargs['hv_ref_point'] = hv
+    elif moea in ('mopso', 'mopso_cd', 'mopso-cd'):
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'lb': params.evo_lb,
+            'ub': params.evo_ub,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'pso_w': float(getattr(params, 'evo_mopso_w', 0.6)),
+            'pso_c1': float(getattr(params, 'evo_mopso_c1', 2.0)),
+            'pso_c2': float(getattr(params, 'evo_mopso_c2', 2.0)),
+            'pso_max_velocity_rate': float(getattr(params, 'evo_mopso_max_velocity_rate', 0.5)),
+            'pso_archive_size': int(getattr(params, 'evo_mopso_archive_size', 200)),
             **hv_common,
         }
         hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
@@ -462,14 +586,15 @@ def _make_evo_args(params):
             evo_kwargs['hv_ref_point'] = hv
     elif moea in ('comocma', 'mocma', 'mo-cma-es'):
         evo_kwargs = {
-            'n_iterations': params.evo_iterations,
-            'num_kernels': params.evo_num_kernels,
-            'sigma0': params.evo_sigma0,
-            'n_eval_batches': params.evo_n_eval_batches,
-            'z_lower': params.evo_z_lower,
-            'z_upper': params.evo_z_upper,
+            'num_iterations': params.evo_iterations,
+            'num_kernels': params.evo_cma_num_kernels,
+            'sigma0': params.evo_cma_sigma0,
+            'num_batches': params.evo_num_batches,
+            'lb': params.evo_lb,
+            'ub': params.evo_ub,
             'seed': params.evo_seed,
             'cma_opts': _make_comocma_cma_opts(params),
+            'evo_eval_freq': evo_eval_freq,
             **hv_common,
         }
         rp = _evo_two_floats_or_none(getattr(params, 'evo_sofomore_reference_point', None))
@@ -483,10 +608,11 @@ def _make_evo_args(params):
 
     return {
         'evo_training': True,
-        'evo_ps': params.evo_ps,
+        'evo_schedule': getattr(params, 'evo_schedule', 'gd_then_moea'),
+        'evo_adapter': params.evo_adapter,
         'moea': params.evo_moea,
-        'ps_alpha': params.evo_ps_alpha,
-        'ps_kwargs': ps_kwargs,
+        'adapter_alpha': params.evo_adapter_alpha,
+        'adapter_kwargs': adapter_kwargs,
         'evo_kwargs': evo_kwargs,
     }
 
@@ -527,11 +653,11 @@ def _display(params, kwargs, optim_param, scheduler_param):
     evo = kwargs.get('evo_args') or {}
     if evo.get('evo_training'):
         print('EvoMTL Configuration:')
-        for k in ('evo_ps', 'moea', 'ps_alpha'):
+        for k in ('evo_schedule', 'evo_adapter', 'moea', 'adapter_alpha'):
             if k in evo:
                 print('\t'+k+':', evo[k])
         print('\t(save_path for GD + EvoMTL):', params.save_path)
-        if evo.get('ps_kwargs'):
-            print('\tps_kwargs:', evo['ps_kwargs'])
+        if evo.get('adapter_kwargs'):
+            print('\tadapter_kwargs:', evo['adapter_kwargs'])
         if evo.get('evo_kwargs'):
             print('\tevo_kwargs:', evo['evo_kwargs'])

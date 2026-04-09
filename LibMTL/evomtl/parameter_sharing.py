@@ -1,8 +1,46 @@
 """Parameter sharing strategies for low-dimensional evolutionary search."""
 
-import numpy as np
+from __future__ import annotations
+
+import math
+from typing import Any, List, Union
+
 import torch
 import torch.nn as nn
+
+
+def _z_to_torch_cpu(z: Any) -> torch.Tensor:
+    """Flatten ``z`` to 1D float64 on CPU.
+
+    Accepts ``torch.Tensor``, Python sequences, or NumPy arrays (via ``torch.as_tensor``, no NumPy import).
+    """
+    if isinstance(z, torch.Tensor):
+        return z.detach().cpu().reshape(-1).to(torch.float64)
+    return torch.as_tensor(z, dtype=torch.float64, device=torch.device("cpu")).reshape(-1)
+
+
+def adapt_parameters(
+    model: nn.Module,
+    theta_0: torch.Tensor,
+    adapter: Any,
+    z: Union[List[float], torch.Tensor, Any],
+    *,
+    alpha: float,
+    device: torch.device,
+) -> None:
+    """Install full weights ``theta = theta_0 + phi(z)`` into ``model``.
+
+    Here ``phi`` is the parameter-sharing map: ``adapter.forward(z, alpha=alpha)`` (expand + ``process``),
+    i.e. the low-dimensional update applied on top of the frozen base snapshot ``theta_0``.
+    """
+    z_t = _z_to_torch_cpu(z)
+    delta = adapter.forward(z_t, alpha=alpha)
+    if not isinstance(delta, torch.Tensor):
+        delta = torch.as_tensor(delta, device=device, dtype=torch.float32)
+    else:
+        delta = delta.to(device).float()
+    full = theta_0 + delta.reshape_as(theta_0)
+    nn.utils.vector_to_parameters(full, model.parameters())
 
 
 class RandomProjection:
@@ -21,38 +59,41 @@ class RandomProjection:
         self.k = k
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        self._rng = torch.Generator()
+        self._rng.manual_seed(int(seed))
+        torch.manual_seed(int(seed))
 
-        self.projections = np.random.randn(self.N, self.k) / np.sqrt(self.k)
+        self.projections = (
+            torch.randn(self.N, self.k, generator=self._rng, dtype=torch.float64)
+            / math.sqrt(self.k)
+        )
         self.num_dims = self.k + 1
         self.z0 = self._init_z0()
 
     def _init_z0(self):
-        z0 = np.zeros(self.num_dims)
+        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
         z0[-1] = 1.0
         return z0
 
     def expand(self, z):
         """Map latent vector z to full parameter space via random projection."""
-        if not isinstance(z, np.ndarray):
-            z = np.asarray(z, dtype=np.float64)
+        z = _z_to_torch_cpu(z)
         z_lat = z[: self.k]
-        s = float(z[self.k])
+        s = float(z[self.k].item())
         x = self.projections @ z_lat
         return s * x
 
     def process(self, x, alpha=1.0):
         """Convert expanded parameters to model-compatible form."""
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         x = x.to(self.device)
         return alpha * x
 
     def load_parameters_to_model(self, parameters):
         """Set model weights from a flat array."""
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
@@ -81,8 +122,9 @@ class LayerwiseRandomProjection:
         self.k = k
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        self._rng = torch.Generator()
+        self._rng.manual_seed(int(seed))
+        torch.manual_seed(int(seed))
 
         self.layer_info = []
         self.param_shapes = []
@@ -94,7 +136,7 @@ class LayerwiseRandomProjection:
 
         for name, param in self.model.named_parameters():
             shape = param.shape
-            size = int(np.prod(shape))
+            size = int(math.prod(shape))
             self.param_shapes.append(shape)
             self.param_sizes.append(size)
 
@@ -113,7 +155,10 @@ class LayerwiseRandomProjection:
                 total_dims += dims
                 n_bias_dims += dims
             else:
-                P = np.random.randn(size, self.k) / np.sqrt(self.k)
+                P = (
+                    torch.randn(size, self.k, generator=self._rng, dtype=torch.float64)
+                    / math.sqrt(self.k)
+                )
                 proj_idx = len(self.projections)
                 self.projections.append(P)
                 dims = self.k
@@ -141,12 +186,11 @@ class LayerwiseRandomProjection:
         )
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
 
     def expand(self, z):
         """Expand layer-wise latent vector to full parameter-space delta."""
-        if not isinstance(z, np.ndarray):
-            z = np.asarray(z, dtype=np.float64)
+        z = _z_to_torch_cpu(z)
 
         reconstructed = []
         for info in self.layer_info:
@@ -158,21 +202,21 @@ class LayerwiseRandomProjection:
                 P = self.projections[info["proj_idx"]]
                 reconstructed.append(P @ z_layer)
             else:
-                reconstructed.append(z_layer.copy())
+                reconstructed.append(z_layer.clone())
 
-        return np.concatenate(reconstructed)
+        return torch.cat(reconstructed)
 
     def process(self, x, alpha=1.0):
         """Convert expanded parameters to model-compatible form."""
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         x = x.to(self.device)
         return alpha * x
 
     def load_parameters_to_model(self, parameters):
         """Set model weights from a flat array."""
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
@@ -207,8 +251,9 @@ class LayerwiseRandomBlocking:
         self.k = k
         self.device = device
 
-        rng = np.random.default_rng(seed)
-        torch.manual_seed(seed)
+        self._rng = torch.Generator()
+        self._rng.manual_seed(int(seed))
+        torch.manual_seed(int(seed))
 
         self.layer_info = []
         self.param_shapes = []
@@ -220,7 +265,7 @@ class LayerwiseRandomBlocking:
 
         for name, param in self.model.named_parameters():
             shape = param.shape
-            size = int(np.prod(shape))
+            size = int(math.prod(shape))
             self.param_shapes.append(shape)
             self.param_sizes.append(size)
 
@@ -253,8 +298,10 @@ class LayerwiseRandomBlocking:
                     total_dims += size
                     n_direct_weight_dims += size
                 else:
-                    base = np.tile(np.arange(self.k), np.ceil(size / self.k).astype(int))[:size]
-                    assignment = rng.permutation(base).astype(np.int64)
+                    n_tiles = int(math.ceil(size / self.k))
+                    base = torch.arange(self.k, dtype=torch.int64).repeat(n_tiles)[:size]
+                    perm = torch.randperm(size, generator=self._rng)
+                    assignment = base[perm]
                     self.layer_info.append(
                         {
                             "type": "rand_blocking",
@@ -278,12 +325,11 @@ class LayerwiseRandomBlocking:
         )
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
 
     def expand(self, z):
         """Expand latent vector to full parameter-space delta via random index ties."""
-        if not isinstance(z, np.ndarray):
-            z = np.asarray(z, dtype=np.float64)
+        z = _z_to_torch_cpu(z)
 
         reconstructed = []
         for info in self.layer_info:
@@ -294,21 +340,21 @@ class LayerwiseRandomBlocking:
             if info["type"] == "rand_blocking":
                 reconstructed.append(z_layer[info["assignment"]])
             else:
-                reconstructed.append(z_layer.copy())
+                reconstructed.append(z_layer.clone())
 
-        return np.concatenate(reconstructed)
+        return torch.cat(reconstructed)
 
     def process(self, x, alpha=1.0):
         """Convert expanded parameters to model-compatible form."""
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         x = x.to(self.device)
         return alpha * x
 
     def load_parameters_to_model(self, parameters):
         """Set model weights from a flat array."""
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
@@ -341,8 +387,9 @@ class LayerwiseScaledRandomProjection:
         self.k = k
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        self._rng = torch.Generator()
+        self._rng.manual_seed(int(seed))
+        torch.manual_seed(int(seed))
 
         self.layer_info = []
         self.param_shapes = []
@@ -354,7 +401,7 @@ class LayerwiseScaledRandomProjection:
 
         for name, param in self.model.named_parameters():
             shape = param.shape
-            size = int(np.prod(shape))
+            size = int(math.prod(shape))
             self.param_shapes.append(shape)
             self.param_sizes.append(size)
 
@@ -373,7 +420,10 @@ class LayerwiseScaledRandomProjection:
                 total_dims += dims
                 n_bias_dims += dims
             else:
-                P = np.random.randn(size, self.k) / np.sqrt(self.k)
+                P = (
+                    torch.randn(size, self.k, generator=self._rng, dtype=torch.float64)
+                    / math.sqrt(self.k)
+                )
                 proj_idx = len(self.projections)
                 self.projections.append(P)
                 dims = self.k + 1  # k latent coords + 1 alpha scale
@@ -401,7 +451,7 @@ class LayerwiseScaledRandomProjection:
         )
 
     def _init_z0(self):
-        z0 = np.zeros(self.num_dims)
+        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
         for info in self.layer_info:
             if info["type"] == "proj_scaled":
                 z0[info["offset"] + self.k] = 1.0
@@ -409,8 +459,7 @@ class LayerwiseScaledRandomProjection:
 
     def expand(self, z):
         """Expand latent vector to full parameter-space delta."""
-        if not isinstance(z, np.ndarray):
-            z = np.asarray(z, dtype=np.float64)
+        z = _z_to_torch_cpu(z)
 
         reconstructed = []
         for info in self.layer_info:
@@ -420,25 +469,25 @@ class LayerwiseScaledRandomProjection:
 
             if info["type"] == "proj_scaled":
                 z_lat = z_layer[: self.k]
-                alpha = float(z_layer[self.k])
+                alpha = float(z_layer[self.k].item())
                 P = self.projections[info["proj_idx"]]
                 reconstructed.append(alpha * (P @ z_lat))
             else:
-                reconstructed.append(z_layer.copy())
+                reconstructed.append(z_layer.clone())
 
-        return np.concatenate(reconstructed)
+        return torch.cat(reconstructed)
 
     def process(self, x, alpha=1.0):
         """Convert expanded parameters to model-compatible form."""
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         x = x.to(self.device)
         return alpha * x
 
     def load_parameters_to_model(self, parameters):
         """Set model weights from a flat array."""
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
@@ -460,8 +509,7 @@ class FlattenLoRA:
         self.r = r
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        torch.manual_seed(int(seed))
 
         self.layer_info = []
         self.param_shapes = []
@@ -511,13 +559,13 @@ class FlattenLoRA:
                 else:
                     dims_other += dims
             else:
-                n = int(np.prod(shape))
+                n = int(math.prod(shape))
                 dims = n
                 self.layer_info.append({'type': 'other', 'n': n, 'original_shape': shape, 'dims': dims, 'offset': total_dims})
                 total_dims += dims
                 dims_other += dims
 
-            self.param_sizes.append(int(np.prod(shape)))
+            self.param_sizes.append(int(math.prod(shape)))
 
         self.num_dims = total_dims
         self.z0 = self._init_z0()
@@ -529,12 +577,11 @@ class FlattenLoRA:
         )
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
 
     def expand(self, z):
         """Expand low-rank vector z to full parameter space."""
-        if not isinstance(z, np.ndarray):
-            z = np.array(z)
+        z = _z_to_torch_cpu(z)
 
         reconstructed_params = []
         for layer_info in self.layer_info:
@@ -548,7 +595,7 @@ class FlattenLoRA:
                 B_flat = z_layer[m * r:]
                 A = A_flat.reshape(m, r)
                 B = B_flat.reshape(n, r)
-                W = (A @ B.T) * (1.0 / np.sqrt(r))
+                W = (A @ B.T) * (1.0 / math.sqrt(r))
                 reconstructed_params.append(W.flatten())
             elif layer_info['type'] == '1d':
                 reconstructed_params.append(z_layer[: layer_info['n']])
@@ -561,25 +608,25 @@ class FlattenLoRA:
                 A = A_flat.reshape(m, r)
                 B = B_flat.reshape(n, r)
                 W_2d = A @ B.T
-                W = W_2d.reshape(original_shape) * (1.0 / np.sqrt(r))
+                W = W_2d.reshape(original_shape) * (1.0 / math.sqrt(r))
                 reconstructed_params.append(W.flatten())
             elif layer_info['type'] == 'other':
                 n = layer_info['n']
-                reconstructed_params.append(z_layer[:n] * (1.0 / np.sqrt(n)))
+                reconstructed_params.append(z_layer[:n] * (1.0 / math.sqrt(n)))
 
-        return np.concatenate(reconstructed_params)
+        return torch.cat(reconstructed_params)
 
     def process(self, x, alpha=1.0):
         """Convert to tensor."""
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         x = x.to(self.device)
         return alpha * x
 
     def load_parameters_to_model(self, parameters):
         """Set model weights from flat array."""
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
@@ -603,8 +650,7 @@ class DictLoRA:
         self.r = r
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        torch.manual_seed(int(seed))
 
         self.layer_info = []
         self.param_shapes = []
@@ -619,7 +665,7 @@ class DictLoRA:
         for name, param in model.named_parameters():
             shape = param.shape
             self.param_shapes.append(shape)
-            size = int(np.prod(shape))
+            size = int(math.prod(shape))
             self.param_sizes.append(size)
             mod_type = module_for_param.get(name)
             is_conv2d = mod_type is not None and issubclass(mod_type, nn.Conv2d)
@@ -686,7 +732,7 @@ class DictLoRA:
         )
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
 
     def _expand_4d_dict(self, z_layer, Cout, Cin, kh, kw, M):
         """Compute ΔW from DictLoRA factors A, B, D."""
@@ -696,13 +742,12 @@ class DictLoRA:
         A = A_flat.reshape(Cout, M)
         B = B_flat.reshape(Cin, M)
         D = D_flat.reshape(M, kh, kw)
-        delta_W = np.einsum('om,im,mhw->oihw', A, B, D)
-        return delta_W * (1.0 / np.sqrt(M))
+        delta_W = torch.einsum("om,im,mhw->oihw", A, B, D)
+        return delta_W * (1.0 / math.sqrt(M))
 
     def expand(self, z):
         """Expand latent vector to full parameter space (deltas for 4d_dict)."""
-        if not isinstance(z, np.ndarray):
-            z = np.array(z)
+        z = _z_to_torch_cpu(z)
 
         reconstructed = []
         for layer_info in self.layer_info:
@@ -716,7 +761,7 @@ class DictLoRA:
                 B_flat = z_layer[m * r:]
                 A = A_flat.reshape(m, r)
                 B = B_flat.reshape(n, r)
-                W = (A @ B.T) * (1.0 / np.sqrt(r))
+                W = (A @ B.T) * (1.0 / math.sqrt(r))
                 reconstructed.append(W.flatten())
             elif layer_info['type'] == '1d':
                 reconstructed.append(z_layer[: layer_info['n']])
@@ -730,21 +775,21 @@ class DictLoRA:
                 reconstructed.append(delta_W.flatten())
             elif layer_info['type'] == 'other':
                 n = layer_info['n']
-                reconstructed.append(z_layer[:n] * (1.0 / np.sqrt(n)))
+                reconstructed.append(z_layer[:n] * (1.0 / math.sqrt(n)))
 
-        return np.concatenate(reconstructed)
+        return torch.cat(reconstructed)
 
     def process(self, x, alpha=1.0):
         """Return delta only; caller adds base_params."""
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         x = x.to(self.device)
         return alpha * x
 
     def load_parameters_to_model(self, parameters):
         """Set model weights from flat array."""
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         parameters = parameters.to(self.device)
         torch.nn.utils.vector_to_parameters(parameters, self.model.parameters())
 
@@ -779,8 +824,7 @@ class LinearOnlyLoRA:
         self.r = r
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        torch.manual_seed(int(seed))
 
         self.base_params = torch.nn.utils.parameters_to_vector(model.parameters())
         self.N = len(self.base_params)
@@ -799,7 +843,7 @@ class LinearOnlyLoRA:
 
         for name, param in model.named_parameters():
             shape = param.shape
-            size = int(np.prod(shape))
+            size = int(math.prod(shape))
             self.param_shapes.append(shape)
             self.param_sizes.append(size)
             mod_type = module_for_param.get(name)
@@ -841,12 +885,11 @@ class LinearOnlyLoRA:
         )
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
 
     def expand(self, z):
         """Expand z to a full-length parameter delta (zeros for frozen layers)."""
-        if not isinstance(z, np.ndarray):
-            z = np.array(z)
+        z = _z_to_torch_cpu(z)
 
         parts = []
         for info in self.layer_info:
@@ -855,23 +898,23 @@ class LinearOnlyLoRA:
                 m, n, r = info['m'], info['n'], self.r
                 A = z[offset:offset + m * r].reshape(m, r)
                 B = z[offset + m * r:offset + m * r + n * r].reshape(n, r)
-                parts.append(((A @ B.T) * (1.0 / np.sqrt(r))).flatten())
+                parts.append(((A @ B.T) * (1.0 / math.sqrt(r))).flatten())
             elif info['type'] == 'direct_1d':
                 offset = info['offset']
-                parts.append(z[offset:offset + info['n']].copy())
+                parts.append(z[offset:offset + info['n']].clone())
             else:
-                parts.append(np.zeros(info['size']))
+                parts.append(torch.zeros(info['size'], dtype=torch.float64, device=torch.device("cpu")))
 
-        return np.concatenate(parts)
+        return torch.cat(parts)
 
     def process(self, x, alpha=1.0):
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         return alpha * x.to(self.device)
 
     def load_parameters_to_model(self, parameters):
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
 
     def forward(self, z, alpha=1.0):
@@ -898,8 +941,7 @@ class ModulationLoRA:
         self.r = r
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        torch.manual_seed(int(seed))
 
         self.base_params = torch.nn.utils.parameters_to_vector(model.parameters())
         self.N = len(self.base_params)
@@ -919,7 +961,7 @@ class ModulationLoRA:
 
         for name, param in model.named_parameters():
             shape = param.shape
-            size = int(np.prod(shape))
+            size = int(math.prod(shape))
             self.param_shapes.append(shape)
             self.param_sizes.append(size)
             mod_type = module_for_param.get(name)
@@ -929,7 +971,7 @@ class ModulationLoRA:
             if is_conv2d and len(shape) == 4:
                 Cout = shape[0]
                 dims = Cout
-                base_w = param.detach().cpu().numpy().copy()
+                base_w = param.detach().cpu().clone()
                 self.layer_info.append({
                     'type': 'modulation_4d', 'name': name, 'Cout': Cout,
                     'dims': dims, 'offset': total_dims, 'size': size,
@@ -975,7 +1017,7 @@ class ModulationLoRA:
         )
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
 
     def expand(self, z):
         """Expand z to a full-length parameter delta.
@@ -983,8 +1025,7 @@ class ModulationLoRA:
         Conv deltas are multiplicative: ``gamma * base_weight``.
         LoRA deltas are additive: ``A @ B^T / sqrt(r)``.
         """
-        if not isinstance(z, np.ndarray):
-            z = np.array(z)
+        z = _z_to_torch_cpu(z)
 
         parts = []
         for info in self.layer_info:
@@ -993,30 +1034,30 @@ class ModulationLoRA:
                 Cout = info['Cout']
                 gamma = z[offset:offset + Cout]
                 base_w = info['base_weight']
-                delta = gamma.reshape(Cout, 1, 1, 1) * base_w
+                delta = gamma.reshape(Cout, 1, 1, 1).to(base_w.dtype) * base_w
                 parts.append(delta.flatten())
             elif info['type'] == 'lora_2d':
                 offset = info['offset']
                 m, n, r = info['m'], info['n'], self.r
                 A = z[offset:offset + m * r].reshape(m, r)
                 B = z[offset + m * r:offset + m * r + n * r].reshape(n, r)
-                parts.append(((A @ B.T) * (1.0 / np.sqrt(r))).flatten())
+                parts.append(((A @ B.T) * (1.0 / math.sqrt(r))).flatten())
             elif info['type'] == 'direct_1d':
                 offset = info['offset']
-                parts.append(z[offset:offset + info['n']].copy())
+                parts.append(z[offset:offset + info['n']].clone())
             else:
-                parts.append(np.zeros(info['size']))
+                parts.append(torch.zeros(info['size'], dtype=torch.float64, device=torch.device("cpu")))
 
-        return np.concatenate(parts)
+        return torch.cat(parts)
 
     def process(self, x, alpha=1.0):
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         return alpha * x.to(self.device)
 
     def load_parameters_to_model(self, parameters):
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
 
     def forward(self, z, alpha=1.0):
@@ -1052,8 +1093,7 @@ class SpectralLoRA:
         self.r = r
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        torch.manual_seed(int(seed))
 
         self.base_params = torch.nn.utils.parameters_to_vector(model.parameters())
         self.N = len(self.base_params)
@@ -1073,7 +1113,7 @@ class SpectralLoRA:
 
         for name, param in model.named_parameters():
             shape = param.shape
-            size = int(np.prod(shape))
+            size = int(math.prod(shape))
             self.param_shapes.append(shape)
             self.param_sizes.append(size)
             mod_type = module_for_param.get(name)
@@ -1082,18 +1122,18 @@ class SpectralLoRA:
 
             if is_conv2d and len(shape) == 4:
                 Cout, Cin, kh, kw = shape
-                W_2d = param.detach().cpu().numpy().reshape(Cout, Cin * kh * kw)
+                W_2d = param.detach().cpu().reshape(Cout, Cin * kh * kw).float()
                 full_rank = min(Cout, Cin * kh * kw)
                 k = min(r, full_rank)
-                U_full, sigma, Vt_full = np.linalg.svd(W_2d, full_matrices=False)
-                U_k = U_full[:, :k].copy()
-                Vt_k = Vt_full[:k, :].copy()
+                U_full, sigma, Vh_full = torch.linalg.svd(W_2d, full_matrices=False)
+                U_k = U_full[:, :k].clone()
+                Vt_k = Vh_full[:k, :].clone()
 
                 self.layer_info.append({
                     'type': 'spectral_4d', 'name': name,
                     'k': k, 'dims': k, 'offset': total_dims, 'size': size,
                     'shape': shape, 'U_k': U_k, 'Vt_k': Vt_k,
-                    'sigma_k': sigma[:k].copy(),
+                    'sigma_k': sigma[:k].clone(),
                 })
                 total_dims += k
                 dims_conv += k
@@ -1135,7 +1175,7 @@ class SpectralLoRA:
         )
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
 
     def expand(self, z):
         """Expand z to a full-length parameter delta.
@@ -1143,8 +1183,7 @@ class SpectralLoRA:
         Conv deltas via spectral modulation: ``U_k @ diag(z) @ Vt_k``.
         Linear deltas via LoRA: ``A @ B^T / sqrt(r)``.
         """
-        if not isinstance(z, np.ndarray):
-            z = np.array(z)
+        z = _z_to_torch_cpu(z)
 
         parts = []
         for info in self.layer_info:
@@ -1152,30 +1191,32 @@ class SpectralLoRA:
                 offset = info['offset']
                 k = info['k']
                 z_sv = z[offset:offset + k]
-                delta_2d = (info['U_k'] * z_sv) @ info['Vt_k']
+                U_k = info['U_k'].to(z_sv.dtype)
+                Vt_k = info['Vt_k'].to(z_sv.dtype)
+                delta_2d = (U_k * z_sv) @ Vt_k
                 parts.append(delta_2d.flatten())
             elif info['type'] == 'lora_2d':
                 offset = info['offset']
                 m, n, r = info['m'], info['n'], self.r
                 A = z[offset:offset + m * r].reshape(m, r)
                 B = z[offset + m * r:offset + m * r + n * r].reshape(n, r)
-                parts.append(((A @ B.T) * (1.0 / np.sqrt(r))).flatten())
+                parts.append(((A @ B.T) * (1.0 / math.sqrt(r))).flatten())
             elif info['type'] == 'direct_1d':
                 offset = info['offset']
-                parts.append(z[offset:offset + info['n']].copy())
+                parts.append(z[offset:offset + info['n']].clone())
             else:
-                parts.append(np.zeros(info['size']))
+                parts.append(torch.zeros(info['size'], dtype=torch.float64, device=torch.device("cpu")))
 
-        return np.concatenate(parts)
+        return torch.cat(parts)
 
     def process(self, x, alpha=1.0):
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         return alpha * x.to(self.device)
 
     def load_parameters_to_model(self, parameters):
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
 
     def forward(self, z, alpha=1.0):
@@ -1203,8 +1244,7 @@ class SpectralAllSVD:
         self.r = r
         self.device = device
 
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        torch.manual_seed(int(seed))
 
         self.base_params = torch.nn.utils.parameters_to_vector(model.parameters())
         self.N = len(self.base_params)
@@ -1224,7 +1264,7 @@ class SpectralAllSVD:
 
         for name, param in model.named_parameters():
             shape = param.shape
-            size = int(np.prod(shape))
+            size = int(math.prod(shape))
             self.param_shapes.append(shape)
             self.param_sizes.append(size)
             mod_type = module_for_param.get(name)
@@ -1233,36 +1273,36 @@ class SpectralAllSVD:
 
             if is_conv2d and len(shape) == 4:
                 Cout, Cin, kh, kw = shape
-                W_2d = param.detach().cpu().numpy().reshape(Cout, Cin * kh * kw)
+                W_2d = param.detach().cpu().reshape(Cout, Cin * kh * kw).float()
                 full_rank = min(Cout, Cin * kh * kw)
                 k = min(r, full_rank)
-                U_full, sigma, Vt_full = np.linalg.svd(W_2d, full_matrices=False)
-                U_k = U_full[:, :k].copy()
-                Vt_k = Vt_full[:k, :].copy()
+                U_full, sigma, Vh_full = torch.linalg.svd(W_2d, full_matrices=False)
+                U_k = U_full[:, :k].clone()
+                Vt_k = Vh_full[:k, :].clone()
 
                 self.layer_info.append({
                     'type': 'spectral_4d', 'name': name,
                     'k': k, 'dims': k, 'offset': total_dims, 'size': size,
                     'shape': shape, 'U_k': U_k, 'Vt_k': Vt_k,
-                    'sigma_k': sigma[:k].copy(),
+                    'sigma_k': sigma[:k].clone(),
                 })
                 total_dims += k
                 dims_conv += k
                 n_spectral_conv += 1
             elif is_linear and len(shape) == 2:
-                W_2d = param.detach().cpu().numpy()
+                W_2d = param.detach().cpu().float()
                 m, n = W_2d.shape
                 full_rank = min(m, n)
                 k = min(r, full_rank)
-                U_full, sigma, Vt_full = np.linalg.svd(W_2d, full_matrices=False)
-                U_k = U_full[:, :k].copy()
-                Vt_k = Vt_full[:k, :].copy()
+                U_full, sigma, Vh_full = torch.linalg.svd(W_2d, full_matrices=False)
+                U_k = U_full[:, :k].clone()
+                Vt_k = Vh_full[:k, :].clone()
 
                 self.layer_info.append({
                     'type': 'spectral_2d', 'name': name,
                     'k': k, 'dims': k, 'offset': total_dims, 'size': size,
                     'shape': shape, 'U_k': U_k, 'Vt_k': Vt_k,
-                    'sigma_k': sigma[:k].copy(),
+                    'sigma_k': sigma[:k].clone(),
                 })
                 total_dims += k
                 dims_linear += k
@@ -1294,12 +1334,11 @@ class SpectralAllSVD:
         )
 
     def _init_z0(self):
-        return np.zeros(self.num_dims)
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
 
     def expand(self, z):
         """Deltas via ``U_k @ diag(z) @ Vt_k`` for conv and linear weights."""
-        if not isinstance(z, np.ndarray):
-            z = np.array(z)
+        z = _z_to_torch_cpu(z)
 
         parts = []
         for info in self.layer_info:
@@ -1307,24 +1346,26 @@ class SpectralAllSVD:
                 offset = info['offset']
                 k = info['k']
                 z_sv = z[offset:offset + k]
-                delta_2d = (info['U_k'] * z_sv) @ info['Vt_k']
+                U_k = info['U_k'].to(z_sv.dtype)
+                Vt_k = info['Vt_k'].to(z_sv.dtype)
+                delta_2d = (U_k * z_sv) @ Vt_k
                 parts.append(delta_2d.flatten())
             elif info['type'] == 'direct_1d':
                 offset = info['offset']
-                parts.append(z[offset:offset + info['n']].copy())
+                parts.append(z[offset:offset + info['n']].clone())
             else:
-                parts.append(np.zeros(info['size']))
+                parts.append(torch.zeros(info['size'], dtype=torch.float64, device=torch.device("cpu")))
 
-        return np.concatenate(parts)
+        return torch.cat(parts)
 
     def process(self, x, alpha=1.0):
         if not isinstance(x, torch.Tensor):
-            x = torch.Tensor(x).to(self.device).float()
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
         return alpha * x.to(self.device)
 
     def load_parameters_to_model(self, parameters):
         if not isinstance(parameters, torch.Tensor):
-            parameters = torch.from_numpy(parameters).to(self.device).float()
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
         torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
 
     def forward(self, z, alpha=1.0):

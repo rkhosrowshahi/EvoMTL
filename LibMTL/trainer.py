@@ -184,15 +184,21 @@ class Trainer(nn.Module):
         mode: str,
         *,
         train_batches_per_epoch: Optional[int] = None,
+        global_step: bool = False,
     ) -> None:
         if not self._wandb_enabled:
             return
         import wandb
 
         prefix = mode
+        local_step = int(step)
+        if global_step:
+            wb_step = local_step
+        else:
+            wb_step = local_step + int(getattr(self, "_wandb_step_offset", 0))
 
         log: Dict[str, Any] = {}
-        log[f"{prefix}/epoch"] = float(step)
+        log[f"{prefix}/epoch"] = float(local_step + 1)
         for tn, task in enumerate(self.task_name):
             log[f"{prefix}/{task}/loss"] = float(self.meter.loss_item[tn])
             metric_names = self.task_dict[task]["metrics"]
@@ -202,9 +208,10 @@ class Trainer(nn.Module):
         if mode == "train":
             log[f"{prefix}/lr"] = float(self.optimizer.param_groups[0]["lr"])
             if train_batches_per_epoch is not None and train_batches_per_epoch > 0:
-                # Global optimizer-step index (0-based) at end of this epoch.
+                # Global optimizer-step index (0-based) at end of this epoch;
+                # epoch in logs is 1-based (``local_step + 1``).
                 log[f"{prefix}/iteration"] = float(
-                    (step + 1) * train_batches_per_epoch - 1
+                    (local_step + 1) * train_batches_per_epoch - 1
                 )
 
         # Aggregate across tasks: mean loss, mean metric, hypervolume over metric vector
@@ -224,7 +231,7 @@ class Trainer(nn.Module):
             self._hv_min_baselines,
         )
 
-        wandb.log(log, step=step)
+        wandb.log(log, step=wb_step)
 
     def _wandb_finish_if(self, finish: bool) -> None:
         if not finish or not self._wandb_enabled:
@@ -357,22 +364,38 @@ class Trainer(nn.Module):
               val_dataloaders=None, return_weight=False, finish_wandb=True, **kwargs):
         evo_args = self.kwargs.get('evo_args') or {}
         if evo_args.get('evo_training'):
-            from LibMTL.evomtl.evo_trainer import EvoMTLTrainer, resolve_ps_class
+            from LibMTL.evomtl.evo_trainer import EvoMTLTrainer, resolve_adapter_class
             if not isinstance(self, EvoMTLTrainer):
                 raise TypeError(
                     "evo_training in config requires EvoMTLTrainer "
                     "(from LibMTL.evomtl.evo_trainer import EvoMTLTrainer)."
                 )
-            ps_class = resolve_ps_class(evo_args['evo_ps'])
+            adapter_class = resolve_adapter_class(evo_args['evo_adapter'])
+            schedule = str(evo_args.get('evo_schedule', 'gd_then_moea')).lower().replace(
+                '-', '_'
+            )
+            if schedule in ('moea_then_gd', 'evo_then_gd'):
+                return self.evolve_then_train(
+                    train_dataloaders,
+                    test_dataloaders,
+                    gd_epochs=epochs,
+                    adapter_class=adapter_class,
+                    moea=evo_args['moea'],
+                    evo_kwargs=dict(evo_args['evo_kwargs']),
+                    adapter_kwargs=dict(evo_args['adapter_kwargs']),
+                    adapter_alpha=evo_args['adapter_alpha'],
+                    val_dataloaders=val_dataloaders,
+                    finish_wandb=finish_wandb,
+                )
             return self.train_then_evolve(
                 train_dataloaders,
                 test_dataloaders,
                 gd_epochs=epochs,
-                ps_class=ps_class,
+                adapter_class=adapter_class,
                 moea=evo_args['moea'],
                 evo_kwargs=dict(evo_args['evo_kwargs']),
-                ps_kwargs=dict(evo_args['ps_kwargs']),
-                ps_alpha=evo_args['ps_alpha'],
+                adapter_kwargs=dict(evo_args['adapter_kwargs']),
+                adapter_alpha=evo_args['adapter_alpha'],
                 val_dataloaders=val_dataloaders,
                 finish_wandb=finish_wandb,
             )
@@ -554,14 +577,16 @@ class Trainer(nn.Module):
             self.meter.display(epoch=epoch, mode=mode, display_tag=display_tag)
         if self._wandb_enabled:
             if epoch is not None:
-                wb_step = int(epoch)
+                # Same contract as train loop: pass 0-based epoch; offset applied once inside.
+                self._wandb_log_epoch_metrics(int(epoch), mode)
             elif wandb_log_step is not None:
-                wb_step = int(wandb_log_step)
+                self._wandb_log_epoch_metrics(
+                    int(wandb_log_step), mode, global_step=True
+                )
             else:
                 raise ValueError(
                     "wandb_log_step is required when epoch is None and wandb is enabled."
                 )
-            self._wandb_log_epoch_metrics(wb_step, mode)
         improvement = self.meter.improvement
         self.meter.reinit()
         if return_improvement:
@@ -869,6 +894,29 @@ class Trainer(nn.Module):
         self.tw_optimizer.zero_grad()
 
 
+    def _compute_losses_no_record(self, model, inputs, gts):
+        """Compute per-task losses without recording them to the performance meter.
+
+        Used by FORUM's inner loop and outer gradient computations so that only
+        the main model's prediction loss (from ``forward4loss``) appears in the
+        training metrics.
+        """
+        if not self.multi_input:
+            preds = model(inputs)
+            preds = self.process_preds(preds)
+            losses = torch.zeros(self.task_num).to(self.device)
+            for tn, task in enumerate(self.task_name):
+                losses[tn] = self.meter.losses[task].compute_loss(preds[task], gts[task])
+        else:
+            losses = torch.zeros(self.task_num).to(self.device)
+            for tn, task in enumerate(self.task_name):
+                inputs_t, gts_t = inputs[task], gts[task]
+                preds_t = model(inputs_t, task)
+                preds_t = preds_t[task]
+                preds_t = self.process_preds(preds_t, task)
+                losses[tn] = self.meter.losses[task].compute_loss(preds_t, gts_t)
+        return losses
+
     def bacth_forward_FORUM(self, inner_x, inner_y, outer_x, outer_y, lambda_buffer, epoch):
         r'''FORUM
     
@@ -899,7 +947,7 @@ class Trainer(nn.Module):
         inner_model = copy.deepcopy(self.model)
         inner_optim = torch.optim.SGD(inner_model.parameters(), lr=inner_lr, weight_decay=0)
         for i in range(inner_step):
-            train_losses = self.forward4loss(inner_model, inner_x, inner_y)
+            train_losses = self._compute_losses_no_record(inner_model, inner_x, inner_y)
             loss = self.tw(train_losses)
             if loss.item() > 1e+5: # caused by too large inner_lr and inner_step
                 break
@@ -909,7 +957,7 @@ class Trainer(nn.Module):
             self.tw_optimizer.zero_grad()
 
         # grad from f^hat(alpha, omega^T)
-        train_losses = self.forward4loss(inner_model, inner_x, inner_y)
+        train_losses = self._compute_losses_no_record(inner_model, inner_x, inner_y)
         loss = self.tw(train_losses)
         g_f_hat_alpha = torch.autograd.grad(loss, self.tw.parameters())
         g_f_hat_alpha = torch.cat([g.view(-1) for g in g_f_hat_alpha])
@@ -919,7 +967,7 @@ class Trainer(nn.Module):
         g_q_beta[:self.task_num] = g_q_beta[:self.task_num] - g_f_hat_alpha # size: [d]
 
         # F(omega)
-        train_losses = self.forward4loss(self.model, outer_x, outer_y)
+        train_losses = self._compute_losses_no_record(self.model, outer_x, outer_y)
         g_F_omega_list = []
         for tn, task in enumerate(self.task_name):
             g_F_omega_tn = torch.autograd.grad(train_losses[tn], self.model.parameters(), retain_graph=True)
@@ -942,18 +990,28 @@ class Trainer(nn.Module):
         A = torch.cat([g_F_omega_list, g_q_beta.unsqueeze(0)], dim=0) # (task_num+1) x d
         AAT = (A @ A.t()).detach().cpu().numpy()
 
-        c, v = np.linalg.eig(AAT)
-        # print(c, v)
-        gg_sqrt = v @ np.diag(np.sqrt(np.maximum(c,0))) @ np.linalg.inv(v)
-        # print(gg_sqrt)
+        # Scale the QP to O(1) to avoid ill-conditioning from the unnormalized g_q_beta row.
+        # Scaling the objective uniformly does not change the optimal w.
+        scale = max(float(np.max(np.abs(AAT))), 1.0)
+        c, v = np.linalg.eigh(AAT / scale)
+        gg_sqrt = (v * np.sqrt(np.maximum(c, 0))) @ v.T
         g_cp = cp.Parameter(shape=(self.task_num+1, self.task_num+1), value=gg_sqrt)
         w_cp = cp.Variable(shape=(self.task_num+1), nonneg=True)
         constraints = [cp.sum(w_cp[:-1]) == 1, 
                        w_cp[-1] >= cp.sum([w_cp[tn]*pi[tn] for tn in range(self.task_num)]), 
                        w_cp >= 0]
-        prob = cp.Problem(cp.Minimize(cp.quad_over_lin(g_cp @ w_cp, 1) - w_cp[-1] * w_constant), constraints)
-        prob.solve()
-        w_cpu = w_cp.value
+        prob = cp.Problem(cp.Minimize(cp.quad_over_lin(g_cp @ w_cp, 1) - w_cp[-1] * (w_constant / scale)), constraints)
+        for solver in [cp.OSQP, cp.SCS, cp.CLARABEL]:
+            try:
+                prob.solve(solver=solver)
+                if w_cp.value is not None:
+                    break
+            except cp.error.SolverError:
+                continue
+        if w_cp.value is not None:
+            w_cpu = w_cp.value
+        else:
+            w_cpu = np.array([1.0 / self.task_num] * self.task_num + [0.0])
 
         # EMA lambda
         for tn in range(self.task_num):
