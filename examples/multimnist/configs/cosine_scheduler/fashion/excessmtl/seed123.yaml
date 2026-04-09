@@ -7,12 +7,6 @@ mode: train
 seed: 123
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: excessmtl-seed123
-wandb_group: excessmtl
-
 # Architecture
 weighting: ExcessMTL
 robust_step_size: 1.0e-2   # step size for the robust weight update (LibMTL default)
@@ -43,3 +37,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/fashion/excessmtl/adam/seed_123/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: excessmtl-seed123
+wandb_group: excessmtl

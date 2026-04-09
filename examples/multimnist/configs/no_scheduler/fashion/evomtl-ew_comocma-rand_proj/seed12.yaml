@@ -62,12 +62,12 @@ evo_hv_center_aggregation: linear
 evo_hv_softmax_temperature: 1.0
 
 
+# Paths
+save_path: logs/fashion/evomtl-ew_comocma-rand_proj/adam/seed_12/
+load_path: null
+
 # Weights & Biases
 wandb_entity: rasa_research
 wandb_project: mtl
 wandb_name: evomtl-ew+comocma-rand_proj-seed12
 wandb_group: evomtl-ew+comocma-rand_proj
-
-# Paths
-save_path: logs/fashion/evomtl-ew_comocma-rand_proj/adam/seed_12/
-load_path: null

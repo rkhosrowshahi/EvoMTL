@@ -7,12 +7,6 @@ mode: train
 seed: 12
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: cagrad-seed12
-wandb_group: cagrad
-
 # Architecture
 weighting: CAGrad
 calpha: 0.5    # conflict-aversion radius (c in the paper)
@@ -41,3 +35,9 @@ amsgrad: false
 # Paths
 save_path: logs/fashion/cagrad/adam/seed_12/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: cagrad-seed12
+wandb_group: cagrad

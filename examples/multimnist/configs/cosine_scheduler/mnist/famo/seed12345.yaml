@@ -7,12 +7,6 @@ mode: train
 seed: 12345
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: famo-seed12345
-wandb_group: famo
-
 # Architecture
 weighting: FAMO
 FAMO_w_lr: 0.025       # learning rate for the per-task weight update
@@ -44,3 +38,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/mnist/famo/adam/seed_12345/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: famo-seed12345
+wandb_group: famo

@@ -7,12 +7,6 @@ mode: train
 seed: 12345
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: imtl-seed12345
-wandb_group: imtl
-
 # Architecture
 weighting: IMTL
 # IMTL — no LibMTL weight_args
@@ -40,3 +34,9 @@ amsgrad: false
 # Paths
 save_path: logs/mnist/imtl/adam/seed_12345/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: imtl-seed12345
+wandb_group: imtl

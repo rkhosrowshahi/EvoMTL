@@ -7,12 +7,6 @@ mode: train
 seed: 123
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: modo-seed123
-wandb_group: modo
-
 # Architecture
 weighting: MoDo
 MoDo_gamma: 1.0e-3   # dual-variable step size
@@ -44,3 +38,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/fashion/modo/adam/seed_123/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: modo-seed123
+wandb_group: modo

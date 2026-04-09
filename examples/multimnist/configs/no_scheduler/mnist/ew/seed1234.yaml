@@ -7,12 +7,6 @@ mode: train
 seed: 1234
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: ew-seed1234
-wandb_group: ew
-
 # Architecture
 weighting: EW
 # EW — no LibMTL weight_args (equal task weights)
@@ -40,3 +34,9 @@ amsgrad: false
 # Paths
 save_path: logs/mnist/ew/adam/seed_1234/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: ew-seed1234
+wandb_group: ew

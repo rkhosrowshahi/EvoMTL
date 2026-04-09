@@ -7,12 +7,6 @@ mode: train
 seed: 12
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: moco-seed12
-wandb_group: moco
-
 # Architecture
 weighting: MoCo
 MoCo_beta: 0.5            # EMA coefficient for gradient mean estimation
@@ -47,3 +41,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/fashion/moco/adam/seed_12/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: moco-seed12
+wandb_group: moco

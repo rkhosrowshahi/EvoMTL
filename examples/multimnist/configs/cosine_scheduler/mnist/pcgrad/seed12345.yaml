@@ -7,12 +7,6 @@ mode: train
 seed: 12345
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: pcgrad-seed12345
-wandb_group: pcgrad
-
 # Architecture
 weighting: PCGrad
 # PCGrad — no LibMTL weight_args
@@ -43,3 +37,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/mnist/pcgrad/adam/seed_12345/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: pcgrad-seed12345
+wandb_group: pcgrad

@@ -7,12 +7,6 @@ mode: train
 seed: 1
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: mgda-seed1
-wandb_group: mgda
-
 # Architecture
 weighting: MGDA
 mgda_gn: none          # gradient normalisation: none | l2 | loss | loss+
@@ -43,3 +37,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/fashion_and_mnist/mgda/adam/seed_1/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: mgda-seed1
+wandb_group: mgda

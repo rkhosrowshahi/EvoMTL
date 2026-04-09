@@ -53,12 +53,12 @@ evo_hv_ref_point: [2.3, 2.3]
 evo_hv_center_aggregation: linear
 evo_hv_softmax_temperature: 1.0
 
+# Paths
+save_path: logs/fashion/evolve_then_train-ew_nsga2-lora-r4/alpha0_005/seed_12345/
+load_path: null
+
 # Weights & Biases
 wandb_entity: rasa_research
 wandb_project: mtl
 wandb_name: evolve_then_train-ew+nsga2-lora-r4-alpha0_005-seed12345
 wandb_group: evolve_then_train-ew+nsga2-lora-r4
-
-# Paths
-save_path: logs/fashion/evolve_then_train-ew_nsga2-lora-r4/alpha0_005/seed_12345/
-load_path: null

@@ -7,12 +7,6 @@ mode: train
 seed: 12
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: nash_mtl-seed12
-wandb_group: nash_mtl
-
 # Architecture
 weighting: Nash_MTL
 update_weights_every: 1    # frequency (in steps) at which Nash weights are recomputed
@@ -45,3 +39,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/fashion/nash_mtl/adam/seed_12/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: nash_mtl-seed12
+wandb_group: nash_mtl

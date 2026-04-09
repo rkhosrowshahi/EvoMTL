@@ -7,12 +7,6 @@ mode: train
 seed: 123
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: sdmgrad-seed123
-wandb_group: sdmgrad
-
 # Architecture
 weighting: SDMGrad
 SDMGrad_lamda: 0.3     # mixing coefficient between the two sampled gradient directions
@@ -41,3 +35,9 @@ amsgrad: false
 # Paths
 save_path: logs/fashion/sdmgrad/adam/seed_123/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: sdmgrad-seed123
+wandb_group: sdmgrad

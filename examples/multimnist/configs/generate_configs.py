@@ -284,12 +284,6 @@ mode: train
 seed: {seed}
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: {wandb_name}
-wandb_group: {wandb_group}
-
 # Architecture
 weighting: {weighting}
 {extra_block}arch: HPS
@@ -316,6 +310,12 @@ amsgrad: false
 # Paths
 save_path: {save_path}
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: {wandb_name}
+wandb_group: {wandb_group}
 """
 
 

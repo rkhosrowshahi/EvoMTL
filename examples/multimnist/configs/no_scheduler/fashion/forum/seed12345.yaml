@@ -7,12 +7,6 @@ mode: train
 seed: 12345
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: forum-seed12345
-wandb_group: forum
-
 # Architecture
 weighting: FORUM
 outer_lr: 1.0e-3        # outer LR (LibMTL default)
@@ -43,3 +37,9 @@ amsgrad: false
 # Paths
 save_path: logs/fashion/forum/adam/seed_12345/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: forum-seed12345
+wandb_group: forum

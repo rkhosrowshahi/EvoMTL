@@ -7,12 +7,6 @@ mode: train
 seed: 12345
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: stch-seed12345
-wandb_group: stch
-
 # Architecture
 weighting: STCH
 STCH_mu: 1.0              # μ smoothing parameter (LibMTL default)
@@ -44,3 +38,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/fashion_and_mnist/stch/adam/seed_12345/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: stch-seed12345
+wandb_group: stch

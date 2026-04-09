@@ -7,12 +7,6 @@ mode: train
 seed: 1234
 gpu_id: "0"
 
-# Weights & Biases
-wandb_entity: rasa_research
-wandb_project: mtl
-wandb_name: db_mtl-seed1234
-wandb_group: db_mtl
-
 # Architecture
 weighting: DB_MTL
 DB_beta: 0.9            # mixing strength toward the new batch gradient (LibMTL default)
@@ -44,3 +38,9 @@ eta_min: 1.0e-6
 # Paths
 save_path: logs/mnist/db_mtl/adam/seed_1234/
 load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: db_mtl-seed1234
+wandb_group: db_mtl
