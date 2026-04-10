@@ -500,7 +500,12 @@ class LayerwiseScaledRandomProjection:
 
 
 class FlattenLoRA:
-    """LoRA-style low-rank decomposition over flattened model parameters."""
+    """LoRA-style low-rank decomposition over flattened model parameters.
+
+    For each 2D or 4D weight, ``z`` holds ``A`` and ``B`` (``m*r + n*r`` values)
+    plus one extra scalar **alpha_layer** that scales that tensor's LoRA delta
+    ``A @ B.T`` (in addition to the global ``process(..., alpha=...)`` scalar).
+    """
 
     def __init__(self, model, r, device="cuda", seed=42):
         self.model = model
@@ -529,7 +534,7 @@ class FlattenLoRA:
 
             if len(shape) == 2:
                 m, n = shape
-                dims = m * r + n * r
+                dims = m * r + n * r + 1
                 self.layer_info.append({'type': '2d', 'm': m, 'n': n, 'dims': dims, 'offset': total_dims})
                 total_dims += dims
                 if is_linear:
@@ -548,7 +553,7 @@ class FlattenLoRA:
             elif len(shape) == 4:
                 out_ch, in_ch, h, w = shape
                 m, n = out_ch, in_ch * h * w
-                dims = m * r + n * r
+                dims = m * r + n * r + 1
                 self.layer_info.append({
                     'type': '4d', 'm': m, 'n': n, 'original_shape': shape,
                     'dims': dims, 'offset': total_dims
@@ -577,7 +582,11 @@ class FlattenLoRA:
         )
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        for layer_info in self.layer_info:
+            if layer_info['type'] in ('2d', '4d'):
+                z0[layer_info['offset'] + layer_info['dims'] - 1] = 1.0
+        return z0
 
     def expand(self, z):
         """Expand low-rank vector z to full parameter space."""
@@ -592,10 +601,11 @@ class FlattenLoRA:
             if layer_info['type'] == '2d':
                 m, n, r = layer_info['m'], layer_info['n'], self.r
                 A_flat = z_layer[:m * r]
-                B_flat = z_layer[m * r:]
+                B_flat = z_layer[m * r : m * r + n * r]
+                alpha_layer = float(z_layer[m * r + n * r].item())
                 A = A_flat.reshape(m, r)
                 B = B_flat.reshape(n, r)
-                W = (A @ B.T) * (1.0 / math.sqrt(r))
+                W = (A @ B.T) * alpha_layer
                 reconstructed_params.append(W.flatten())
             elif layer_info['type'] == '1d':
                 reconstructed_params.append(z_layer[: layer_info['n']])
@@ -604,11 +614,12 @@ class FlattenLoRA:
                 original_shape = layer_info['original_shape']
                 r = self.r
                 A_flat = z_layer[:m * r]
-                B_flat = z_layer[m * r:]
+                B_flat = z_layer[m * r : m * r + n * r]
+                alpha_layer = float(z_layer[m * r + n * r].item())
                 A = A_flat.reshape(m, r)
                 B = B_flat.reshape(n, r)
                 W_2d = A @ B.T
-                W = W_2d.reshape(original_shape) * (1.0 / math.sqrt(r))
+                W = W_2d.reshape(original_shape) * alpha_layer
                 reconstructed_params.append(W.flatten())
             elif layer_info['type'] == 'other':
                 n = layer_info['n']
@@ -639,8 +650,10 @@ class FlattenLoRA:
 class DictLoRA:
     """
     Dictionary-based LoRA for ConvNets.
-    For Conv2d: ΔW[o,i,:,:] = Σ_m A[o,m]·B[i,m]·D[m,:,:]
-    For Linear/bias: standard LoRA / direct.
+    For Conv2d: ΔW[o,i,:,:] = α · (Σ_m A[o,m]·B[i,m]·D[m,:,:]) / sqrt(M)
+    For Linear 2D: ΔW = α · (A @ B.T).  The scalar α is one extra dimension per
+    LoRA block in ``z`` (last entry of that block), in addition to global ``process`` α.
+    For Linear/bias 1D: direct (no per-layer α).
     """
 
     def __init__(self, model, r, device="cuda", seed=42):
@@ -673,7 +686,7 @@ class DictLoRA:
 
             if len(shape) == 2:
                 m, n = shape
-                dims = m * r + n * r
+                dims = m * r + n * r + 1
                 self.layer_info.append({
                     'type': '2d', 'm': m, 'n': n, 'dims': dims, 'offset': total_dims,
                     'base_offset': base_offset, 'base_size': size,
@@ -698,7 +711,7 @@ class DictLoRA:
             elif len(shape) == 4:
                 out_ch, in_ch, kh, kw = shape
                 M = self.r
-                dims = M * (out_ch + in_ch + kh * kw)
+                dims = M * (out_ch + in_ch + kh * kw) + 1
                 self.layer_info.append({
                     'type': '4d_dict',
                     'Cout': out_ch, 'Cin': in_ch, 'kh': kh, 'kw': kw,
@@ -732,7 +745,11 @@ class DictLoRA:
         )
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        for layer_info in self.layer_info:
+            if layer_info['type'] in ('2d', '4d_dict'):
+                z0[layer_info['offset'] + layer_info['dims'] - 1] = 1.0
+        return z0
 
     def _expand_4d_dict(self, z_layer, Cout, Cin, kh, kw, M):
         """Compute ΔW from DictLoRA factors A, B, D."""
@@ -758,21 +775,23 @@ class DictLoRA:
             if layer_info['type'] == '2d':
                 m, n, r = layer_info['m'], layer_info['n'], self.r
                 A_flat = z_layer[:m * r]
-                B_flat = z_layer[m * r:]
+                B_flat = z_layer[m * r : m * r + n * r]
+                alpha_layer = float(z_layer[m * r + n * r].item())
                 A = A_flat.reshape(m, r)
                 B = B_flat.reshape(n, r)
-                W = (A @ B.T) * (1.0 / math.sqrt(r))
+                W = (A @ B.T) * alpha_layer
                 reconstructed.append(W.flatten())
             elif layer_info['type'] == '1d':
                 reconstructed.append(z_layer[: layer_info['n']])
             elif layer_info['type'] == '4d_dict':
+                alpha_layer = float(z_layer[-1].item())
                 delta_W = self._expand_4d_dict(
-                    z_layer,
+                    z_layer[:-1],
                     layer_info['Cout'], layer_info['Cin'],
                     layer_info['kh'], layer_info['kw'],
                     layer_info['M'],
                 )
-                reconstructed.append(delta_W.flatten())
+                reconstructed.append((delta_W * alpha_layer).flatten())
             elif layer_info['type'] == 'other':
                 n = layer_info['n']
                 reconstructed.append(z_layer[:n] * (1.0 / math.sqrt(n)))
@@ -813,7 +832,8 @@ class LinearOnlyLoRA:
     """LoRA exclusively on ``nn.Linear`` layers; everything else frozen.
 
     Conv2d, BatchNorm, LayerNorm, and all other parameters produce zero delta.
-    Linear weights get rank-*r* LoRA; Linear biases are evolved directly.
+    Linear weights get rank-*r* LoRA plus one scalar **alpha_layer** per weight
+    (last entry of each LoRA block in ``z``); Linear biases are evolved directly.
 
     Ideal for architectures where class-discriminative information concentrates
     in linear projections (transformer Q/V/MLP, classifier FC heads).
@@ -851,7 +871,7 @@ class LinearOnlyLoRA:
 
             if is_linear and len(shape) == 2:
                 m, n = shape
-                dims = m * r + n * r
+                dims = m * r + n * r + 1
                 self.layer_info.append({
                     'type': 'lora_2d', 'name': name, 'm': m, 'n': n,
                     'dims': dims, 'offset': total_dims, 'size': size,
@@ -885,7 +905,11 @@ class LinearOnlyLoRA:
         )
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        for info in self.layer_info:
+            if info['type'] == 'lora_2d':
+                z0[info['offset'] + info['dims'] - 1] = 1.0
+        return z0
 
     def expand(self, z):
         """Expand z to a full-length parameter delta (zeros for frozen layers)."""
@@ -897,8 +921,9 @@ class LinearOnlyLoRA:
                 offset = info['offset']
                 m, n, r = info['m'], info['n'], self.r
                 A = z[offset:offset + m * r].reshape(m, r)
-                B = z[offset + m * r:offset + m * r + n * r].reshape(n, r)
-                parts.append(((A @ B.T) * (1.0 / math.sqrt(r))).flatten())
+                B = z[offset + m * r : offset + m * r + n * r].reshape(n, r)
+                alpha_layer = float(z[offset + m * r + n * r].item())
+                parts.append(((A @ B.T) * alpha_layer).flatten())
             elif info['type'] == 'direct_1d':
                 offset = info['offset']
                 parts.append(z[offset:offset + info['n']].clone())
@@ -928,7 +953,8 @@ class ModulationLoRA:
         ``delta_W[o,:,:,:] = gamma[o] * W_base[o,:,:,:]``
         gamma=0 at init (z0=0) produces zero delta; the base model is preserved.
 
-    Linear weights: standard rank-*r* LoRA.
+    Linear weights: rank-*r* LoRA with one **alpha_layer** per linear weight
+    (last entry of each LoRA block in ``z``).
     Linear biases: evolved directly.
     BatchNorm, LayerNorm, and all other parameters: frozen (zero delta).
 
@@ -982,7 +1008,7 @@ class ModulationLoRA:
                 n_modulated += 1
             elif is_linear and len(shape) == 2:
                 m, n = shape
-                dims = m * r + n * r
+                dims = m * r + n * r + 1
                 self.layer_info.append({
                     'type': 'lora_2d', 'name': name, 'm': m, 'n': n,
                     'dims': dims, 'offset': total_dims, 'size': size,
@@ -1017,13 +1043,17 @@ class ModulationLoRA:
         )
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        for info in self.layer_info:
+            if info['type'] == 'lora_2d':
+                z0[info['offset'] + info['dims'] - 1] = 1.0
+        return z0
 
     def expand(self, z):
         """Expand z to a full-length parameter delta.
 
         Conv deltas are multiplicative: ``gamma * base_weight``.
-        LoRA deltas are additive: ``A @ B^T / sqrt(r)``.
+        LoRA deltas are additive: ``alpha_layer * (A @ B^T)``.
         """
         z = _z_to_torch_cpu(z)
 
@@ -1040,8 +1070,9 @@ class ModulationLoRA:
                 offset = info['offset']
                 m, n, r = info['m'], info['n'], self.r
                 A = z[offset:offset + m * r].reshape(m, r)
-                B = z[offset + m * r:offset + m * r + n * r].reshape(n, r)
-                parts.append(((A @ B.T) * (1.0 / math.sqrt(r))).flatten())
+                B = z[offset + m * r : offset + m * r + n * r].reshape(n, r)
+                alpha_layer = float(z[offset + m * r + n * r].item())
+                parts.append(((A @ B.T) * alpha_layer).flatten())
             elif info['type'] == 'direct_1d':
                 offset = info['offset']
                 parts.append(z[offset:offset + info['n']].clone())
@@ -1080,7 +1111,8 @@ class SpectralLoRA:
     one orthogonal mode of the weight matrix.  Spatial filter structure is
     completely preserved because U and V are frozen from the base model.
 
-    Linear weights: standard rank-*r* LoRA (bilinear).
+    Linear weights: rank-*r* LoRA with one **alpha_layer** scalar per linear weight
+    (last entry of each LoRA block in ``z``).
     Linear biases: evolved directly.
     BatchNorm, LayerNorm, and all other parameters: frozen (zero delta).
 
@@ -1140,7 +1172,7 @@ class SpectralLoRA:
                 n_spectral += 1
             elif is_linear and len(shape) == 2:
                 m, n = shape
-                dims = m * r + n * r
+                dims = m * r + n * r + 1
                 self.layer_info.append({
                     'type': 'lora_2d', 'name': name, 'm': m, 'n': n,
                     'dims': dims, 'offset': total_dims, 'size': size,
@@ -1175,13 +1207,17 @@ class SpectralLoRA:
         )
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        for info in self.layer_info:
+            if info['type'] == 'lora_2d':
+                z0[info['offset'] + info['dims'] - 1] = 1.0
+        return z0
 
     def expand(self, z):
         """Expand z to a full-length parameter delta.
 
         Conv deltas via spectral modulation: ``U_k @ diag(z) @ Vt_k``.
-        Linear deltas via LoRA: ``A @ B^T / sqrt(r)``.
+        Linear deltas via LoRA: ``alpha_layer * (A @ B^T)``.
         """
         z = _z_to_torch_cpu(z)
 
@@ -1199,8 +1235,9 @@ class SpectralLoRA:
                 offset = info['offset']
                 m, n, r = info['m'], info['n'], self.r
                 A = z[offset:offset + m * r].reshape(m, r)
-                B = z[offset + m * r:offset + m * r + n * r].reshape(n, r)
-                parts.append(((A @ B.T) * (1.0 / math.sqrt(r))).flatten())
+                B = z[offset + m * r : offset + m * r + n * r].reshape(n, r)
+                alpha_layer = float(z[offset + m * r + n * r].item())
+                parts.append(((A @ B.T) * alpha_layer).flatten())
             elif info['type'] == 'direct_1d':
                 offset = info['offset']
                 parts.append(z[offset:offset + info['n']].clone())
