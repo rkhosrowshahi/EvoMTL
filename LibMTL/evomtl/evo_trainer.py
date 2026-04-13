@@ -29,9 +29,14 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import numpy as np
-from numpy.random import pareto
 import torch
 import torch.nn as nn
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import wandb
 
 from ..trainer import Trainer
 from .parameter_sharing import (
@@ -304,8 +309,6 @@ class EvoMTLTrainer(Trainer):
             flush=True,
         )
         if getattr(self, "_wandb_enabled", False):
-            import wandb
-
             wandb.config.update(
                 {
                     "evo_num_parameters": num_parameters,
@@ -483,7 +486,7 @@ class EvoMTLTrainer(Trainer):
         hv_center_aggregation: str = "linear",
         hv_softmax_temperature: float = 1.0,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Restrict to the Pareto front, compute HV weights, return ``z_center``."""
+        """Restrict to the Pareto front, compute HV weights, return ``pareto_center_X``."""
         F = np.atleast_2d(F)
         X = np.atleast_2d(X)
         idx = pareto_front_indices(F)
@@ -495,8 +498,8 @@ class EvoMTLTrainer(Trainer):
             aggregation=hv_center_aggregation,
             softmax_temperature=hv_softmax_temperature,
         )
-        z_c = pareto_center_from_weights(X_nd, w)
-        return z_c, w, idx
+        pareto_center_X = pareto_center_from_weights(X_nd, w)
+        return pareto_center_X, w, idx
 
     def _wandb_log_evo_front_metrics(
         self,
@@ -524,6 +527,118 @@ class EvoMTLTrainer(Trainer):
         if extras:
             log.update(extras)
         self._wandb_log(log, step=step)
+
+    def _wandb_log_evo_objective_plot(
+        self,
+        *,
+        population_F: np.ndarray,
+        pareto_F: np.ndarray,
+        center_F: Optional[np.ndarray],
+        offspring_F: Optional[np.ndarray] = None,
+        step: int,
+    ) -> None:
+        """Single 2D scatter: population, offspring, Pareto front, Pareto-center snapshot."""
+        if not getattr(self, "_wandb_enabled", False):
+            return
+        n_obj = int(self.task_num)
+        if n_obj < 2:
+            return
+        F_pop = np.atleast_2d(np.asarray(population_F, dtype=np.float64))
+        F_pf = np.atleast_2d(np.asarray(pareto_F, dtype=np.float64))
+        if offspring_F is not None:
+            F_off = np.atleast_2d(np.asarray(offspring_F, dtype=np.float64))
+            if F_off.size == 0:
+                F_off = np.empty((0, n_obj), dtype=np.float64)
+        else:
+            F_off = np.empty((0, n_obj), dtype=np.float64)
+        if (
+            F_pop.size == 0
+            and F_pf.size == 0
+            and center_F is None
+            and F_off.size == 0
+        ):
+            return
+        if F_pop.size and F_pop.shape[1] != n_obj:
+            return
+        if F_pf.size and F_pf.shape[1] != n_obj:
+            return
+        if F_off.size and F_off.shape[1] != n_obj:
+            return
+        if center_F is not None:
+            c = np.asarray(center_F, dtype=np.float64).reshape(-1)
+            if c.size != n_obj:
+                return
+
+        i, j = 0, 1
+        names = list(self.task_name)
+        fig, ax = plt.subplots(1, 1, figsize=(6.0, 6.0), dpi=120)
+
+        if F_pop.size:
+            ax.scatter(
+                F_pop[:, i],
+                F_pop[:, j],
+                c="#94a3b8",
+                s=22,
+                alpha=0.65,
+                linewidths=0,
+                label=f"Population ({len(F_pop)})",
+                zorder=1,
+            )
+        if F_off.size:
+            ax.scatter(
+                F_off[:, i],
+                F_off[:, j],
+                c="#2563eb",
+                s=36,
+                alpha=0.85,
+                linewidths=0,
+                marker="^",
+                label=f"Offspring ({len(F_off)})",
+                zorder=2,
+            )
+        if F_pf.size:
+            ax.scatter(
+                F_pf[:, i],
+                F_pf[:, j],
+                c="#dc2626",
+                s=45,
+                alpha=0.9,
+                linewidths=0,
+                marker="o",
+                label=f"Pareto front ({len(F_pf)})",
+                zorder=3,
+            )
+        if center_F is not None:
+            c = np.asarray(center_F, dtype=np.float64).reshape(-1)
+            ax.scatter(
+                c[i],
+                c[j],
+                c="#16a34a",
+                s=120,
+                marker="*",
+                edgecolors="#14532d",
+                linewidths=0.8,
+                label="Pareto center",
+                zorder=4,
+            )
+        ax.set_xlabel(names[i])
+        ax.set_ylabel(names[j])
+        ax.grid(True, alpha=0.35)
+        n_leg = (
+            int(bool(F_pop.size))
+            + int(bool(F_off.size))
+            + int(bool(F_pf.size))
+            + int(center_F is not None)
+        )
+        ax.legend(
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=min(4, max(1, n_leg)),
+            frameon=False,
+        )
+        plt.tight_layout()
+        self._wandb_log({"evo/objective_plot": wandb.Image(fig)}, step=step)
+        plt.close(fig)
 
     def _print_evo_progress(
         self,
@@ -639,7 +754,7 @@ class EvoMTLTrainer(Trainer):
         algorithm.setup(problem, termination=NoTermination())
 
         num_iterations = int(num_iterations)
-        for gen_idx in range(num_iterations):
+        for iteration in range(num_iterations):
             t0 = time.perf_counter()
             
             shared_batches = self._sample_batches(train_dataloaders, num_batches)
@@ -649,8 +764,8 @@ class EvoMTLTrainer(Trainer):
                 for i in range(len(pop_X)):
                     self.adapt_parameters(pop_X[i])
                     pop_F[i] = self.evaluate_multiobjective_losses(
-                            train_dataloaders, prefetched_batches=shared_batches
-                        )
+                        train_dataloaders, prefetched_batches=shared_batches
+                    )
                 algorithm.pop.set("F", pop_F)
             offspring = algorithm.ask()
             offspring_X = offspring.get("X")
@@ -665,83 +780,99 @@ class EvoMTLTrainer(Trainer):
             algorithm.tell(infills=offspring)
             result = algorithm.result()
             pareto_front = result.opt.get("F")
-            pareto_set = result.opt.get("X")
+            pareto_latents = result.opt.get("X")
 
             elapsed = time.perf_counter() - t0
             self._print_evo_progress(
                 "NSGA-II iteration",
-                gen_idx,
+                iteration,
                 num_iterations,
                 pareto_front,
                 elapsed=elapsed,
                 offspring_X=offspring_X,
-                wandb_log_step=wandb_step_offset + gen_idx,
+                wandb_log_step=wandb_step_offset + iteration,
             )
             self._wandb_log_evo_front_metrics(
-                gen_idx, pareto_front, wandb_step_offset + gen_idx
+                iteration, pareto_front, wandb_step_offset + iteration
             )
 
             # --- Pareto-center evaluation on current batch + test set ---
-            _w = marginal_hypervolume_weights(
+            hv_weights = marginal_hypervolume_weights(
                 pareto_front,
                 ref_point=hv_ref_point,
                 aggregation=hv_center_aggregation,
                 softmax_temperature=hv_softmax_temperature,
             )
-            _z_c = pareto_center_from_weights(pareto_set, _w)
-            self.adapt_parameters(_z_c)
-            _train_snap = self.metrics_snapshot_from_prefetched_batches(shared_batches)
+            pareto_center_z = pareto_center_from_weights(pareto_latents, hv_weights)
+            self.adapt_parameters(pareto_center_z)
+            train_batch_metrics = self.metrics_snapshot_from_prefetched_batches(
+                shared_batches
+            )
+            population_F = np.atleast_2d(
+                np.asarray(algorithm.pop.get("F"), dtype=np.float64)
+            )
+            if _moea_should_run_full_test(iteration, num_iterations, evo_eval_freq):
+                self._wandb_log_evo_objective_plot(
+                    population_F=population_F,
+                    pareto_F=np.asarray(pareto_front, dtype=np.float64),
+                    center_F=np.asarray(train_batch_metrics["loss_item"], dtype=np.float64),
+                    offspring_F=np.asarray(offspring_F, dtype=np.float64),
+                    step=wandb_step_offset + iteration,
+                )
             run_test = test_dataloaders is not None and _moea_should_run_full_test(
-                gen_idx, num_iterations, evo_eval_freq
+                iteration, num_iterations, evo_eval_freq
             )
             if run_test:
-                _m_test = self.test(
+                test_metrics = self.test(
                     test_dataloaders,
                     epoch=None,
                     mode="test",
-                    wandb_log_step=wandb_step_offset + gen_idx,
+                    wandb_log_step=wandb_step_offset + iteration,
                     suppress_display=True,
                     return_metrics=True,
                 )
                 self.print_compact_train_test_line(
-                    _train_snap,
-                    _m_test,
-                    epoch_label=gen_idx + 1,
+                    train_batch_metrics,
+                    test_metrics,
+                    epoch_label=iteration + 1,
                 )
             else:
                 parts = " | ".join(
-                    f"{task}: {float(_train_snap['loss_item'][i]):.4f}"
+                    f"{task}: {float(train_batch_metrics['loss_item'][i]):.4f}"
                     for i, task in enumerate(self.task_name)
                 )
-                print(f"[EvoMTL] Pareto z TRAIN (curr batch) gen {gen_idx + 1:04d} | {parts}", flush=True)
+                print(
+                    f"[EvoMTL] Pareto z TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
+                    flush=True,
+                )
 
         pop = algorithm.pop
         F_all = pop.get("F")
         X_all = pop.get("X")
-        idx = pareto_front_indices(F_all)
-        F_nd = F_all[idx]
-        X_nd = X_all[idx]
+        nd_front_indices = pareto_front_indices(F_all)
+        pareto_F = F_all[nd_front_indices]
+        pareto_X = X_all[nd_front_indices]
 
-        w = marginal_hypervolume_weights(
-            F_nd,
+        hv_weights = marginal_hypervolume_weights(
+            pareto_F,
             ref_point=hv_ref_point,
             aggregation=hv_center_aggregation,
             softmax_temperature=hv_softmax_temperature,
         )
         if hv_ref_point is None:
-            hv_ref_point = _default_hv_ref_point(F_nd)
-        z_center = pareto_center_from_weights(X_nd, w)
+            hv_ref_point = _default_hv_ref_point(pareto_F)
+        pareto_center_X = pareto_center_from_weights(pareto_X, hv_weights)
 
-        self.adapt_parameters(z_center)
+        self.adapt_parameters(pareto_center_X)
         out = {
             "method": "NSGA2",
             "algorithm": algorithm,
-            "pareto_F": F_nd,
-            "pareto_X": X_nd,
+            "pareto_F": pareto_F,
+            "pareto_X": pareto_X,
             "population_F": F_all,
             "population_X": X_all,
-            "hv_weights": w,
-            "z_center": z_center,
+            "hv_weights": hv_weights,
+            "pareto_center_X": pareto_center_X,
             "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
             "hv_center_aggregation": hv_center_aggregation,
             "hv_softmax_temperature": float(hv_softmax_temperature),
@@ -802,7 +933,7 @@ class EvoMTLTrainer(Trainer):
         algorithm.setup(problem, termination=NoTermination())
 
         num_iterations = int(num_iterations)
-        for gen_idx in range(num_iterations):
+        for iteration in range(num_iterations):
             t0 = time.perf_counter()
 
             shared_batches = self._sample_batches(train_dataloaders, num_batches)
@@ -828,82 +959,99 @@ class EvoMTLTrainer(Trainer):
             algorithm.tell(infills=offspring)
             result = algorithm.result()
             pareto_front = result.opt.get("F")
-            pareto_set = result.opt.get("X")
+            pareto_latents = result.opt.get("X")
 
             elapsed = time.perf_counter() - t0
             self._print_evo_progress(
                 "MOPSO-CD iteration",
-                gen_idx,
+                iteration,
                 num_iterations,
                 pareto_front,
                 elapsed=elapsed,
                 offspring_X=offspring_X,
-                wandb_log_step=wandb_step_offset + gen_idx,
+                wandb_log_step=wandb_step_offset + iteration,
             )
             self._wandb_log_evo_front_metrics(
-                gen_idx, pareto_front, wandb_step_offset + gen_idx
+                iteration, pareto_front, wandb_step_offset + iteration
             )
 
-            _w = marginal_hypervolume_weights(
+            # --- Pareto-center evaluation on current batch + test set ---
+            hv_weights = marginal_hypervolume_weights(
                 pareto_front,
                 ref_point=hv_ref_point,
                 aggregation=hv_center_aggregation,
                 softmax_temperature=hv_softmax_temperature,
             )
-            _z_c = pareto_center_from_weights(pareto_set, _w)
-            self.adapt_parameters(_z_c)
-            _train_snap = self.metrics_snapshot_from_prefetched_batches(shared_batches)
+            pareto_center_z = pareto_center_from_weights(pareto_latents, hv_weights)
+            self.adapt_parameters(pareto_center_z)
+            train_batch_metrics = self.metrics_snapshot_from_prefetched_batches(
+                shared_batches
+            )
+            population_F = np.atleast_2d(
+                np.asarray(algorithm.pop.get("F"), dtype=np.float64)
+            )
+            if _moea_should_run_full_test(iteration, num_iterations, evo_eval_freq):
+                self._wandb_log_evo_objective_plot(
+                    population_F=population_F,
+                    pareto_F=np.asarray(pareto_front, dtype=np.float64),
+                    center_F=np.asarray(train_batch_metrics["loss_item"], dtype=np.float64),
+                    offspring_F=np.asarray(offspring_F, dtype=np.float64),
+                    step=wandb_step_offset + iteration,
+                )
             run_test = test_dataloaders is not None and _moea_should_run_full_test(
-                gen_idx, num_iterations, evo_eval_freq
+                iteration, num_iterations, evo_eval_freq
             )
             if run_test:
-                _m_test = self.test(
+                test_metrics = self.test(
                     test_dataloaders,
                     epoch=None,
                     mode="test",
-                    wandb_log_step=wandb_step_offset + gen_idx,
+                    wandb_log_step=wandb_step_offset + iteration,
                     suppress_display=True,
                     return_metrics=True,
                 )
                 self.print_compact_train_test_line(
-                    _train_snap,
-                    _m_test,
-                    epoch_label=gen_idx + 1,
+                    train_batch_metrics,
+                    test_metrics,
+                    epoch_label=iteration + 1,
                 )
             else:
                 parts = " | ".join(
-                    f"{task}: {float(_train_snap['loss_item'][i]):.4f}"
+                    f"{task}: {float(train_batch_metrics['loss_item'][i]):.4f}"
                     for i, task in enumerate(self.task_name)
                 )
-                print(f"[EvoMTL] Pareto z TRAIN (curr batch) gen {gen_idx + 1:04d} | {parts}", flush=True)
+                print(
+                    f"[EvoMTL] Pareto z TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
+                    flush=True,
+                )
 
         pop = algorithm.pop
         F_all = pop.get("F")
         X_all = pop.get("X")
-        idx = pareto_front_indices(F_all)
-        F_nd = F_all[idx]
-        X_nd = X_all[idx]
+        nd_front_indices = pareto_front_indices(F_all)
+        pareto_F = F_all[nd_front_indices]
+        pareto_X = X_all[nd_front_indices]
 
-        w = marginal_hypervolume_weights(
-            F_nd,
+        hv_weights = marginal_hypervolume_weights(
+            pareto_F,
             ref_point=hv_ref_point,
             aggregation=hv_center_aggregation,
             softmax_temperature=hv_softmax_temperature,
         )
         if hv_ref_point is None:
-            hv_ref_point = _default_hv_ref_point(F_nd)
-        z_center = pareto_center_from_weights(X_nd, w)
+            hv_ref_point = _default_hv_ref_point(pareto_F)
+        pareto_center_X = pareto_center_from_weights(pareto_X, hv_weights)
 
-        self.adapt_parameters(z_center)
+        self.adapt_parameters(pareto_center_X)
         out = {
             "method": "MOPSO-CD",
             "algorithm": algorithm,
-            "pareto_F": F_nd,
-            "pareto_X": X_nd,
+            "pareto_F": pareto_F,
+            "pareto_X": pareto_X,
             "population_F": F_all,
             "population_X": X_all,
-            "hv_weights": w,
-            "z_center": z_center,
+            "hv_weights": hv_weights,
+            "pareto_center_X": pareto_center_X,
             "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
             "hv_center_aggregation": hv_center_aggregation,
             "hv_softmax_temperature": float(hv_softmax_temperature),
@@ -977,113 +1125,135 @@ class EvoMTLTrainer(Trainer):
         moes = comocma.Sofomore(list_of_solvers, reference_point)
 
         num_iterations = int(num_iterations)
-        for it in range(num_iterations):
+        for iteration in range(num_iterations):
             t0 = time.perf_counter()
             solutions = moes.ask("all")
             solutions_X = np.asarray(solutions, dtype=np.float64)
             shared_batches = self._sample_batches(train_dataloaders, num_batches)
-            objs = []
+            solution_objectives: List[List[float]] = []
             for x in solutions:
                 self.adapt_parameters(x)
                 L = self.evaluate_multiobjective_losses(
                     train_dataloaders, prefetched_batches=shared_batches
                 )
-                objs.append([float(L[0]), float(L[1])])
-            moes.tell(solutions, objs)
-            # objs_arr = np.asarray(objs, dtype=np.float64)
-            pf_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
-            ps_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
+                solution_objectives.append([float(L[0]), float(L[1])])
+            moes.tell(solutions, solution_objectives)
+            solutions_F = np.asarray(solution_objectives, dtype=np.float64)
+            pareto_front_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
+            pareto_set_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
 
             elapsed = time.perf_counter() - t0
-            extras = None
-            extras_print = None
-            pf_n = len(pf_cut)
+            wandb_iteration_extras: Optional[Dict[str, Any]] = None
+            progress_extras: Optional[str] = None
             if moes.kernels:
                 sig = float(np.mean([float(k.sigma) for k in moes.kernels]))
-                extras = {
+                wandb_iteration_extras = {
                     "evo/comocma/sigma_mean": sig,
                 }
-                extras_print = f"sigma_mean={sig:.4f}"
+                progress_extras = f"sigma_mean={sig:.4f}"
             else:
-                extras_print = None
+                progress_extras = None
             self._print_evo_progress(
                 "COMO-CMA",
-                it,
+                iteration,
                 num_iterations,
-                pf_cut,
-                extras=extras_print,
+                pareto_front_cut,
+                extras=progress_extras,
                 elapsed=elapsed,
                 offspring_X=solutions_X,
-                wandb_log_step=wandb_step_offset + it,
+                wandb_log_step=wandb_step_offset + iteration,
             )
             
-            # if len(pf_cut) > 0:
+            # if len(pareto_front_cut) > 0:
             #     self.print_pareto_front_objective_stats(
-            #         pf_cut,
+            #         pareto_front_cut,
             #         line_label="Pareto front (ref cut)",
             #     )
             self._wandb_log_evo_front_metrics(
-                it, pf_cut, wandb_step_offset + it, extras=extras
+                iteration,
+                pareto_front_cut,
+                wandb_step_offset + iteration,
+                extras=wandb_iteration_extras,
             )
 
             # --- Pareto-center evaluation on current batch + test set ---
-            if len(pf_cut) > 0:
-                _w = marginal_hypervolume_weights(
-                    pf_cut,
+            center_objectives_F: Optional[np.ndarray] = None
+            if len(pareto_front_cut) > 0:
+                hv_weights = marginal_hypervolume_weights(
+                    pareto_front_cut,
                     ref_point=hv_ref_point,
                     aggregation=hv_center_aggregation,
                     softmax_temperature=hv_softmax_temperature,
                 )
-                _z_c = pareto_center_from_weights(ps_cut, _w)
-                self.adapt_parameters(_z_c)
-                _train_snap = self.metrics_snapshot_from_prefetched_batches(shared_batches)
+                pareto_center_z = pareto_center_from_weights(
+                    pareto_set_cut, hv_weights
+                )
+                self.adapt_parameters(pareto_center_z)
+                train_batch_metrics = self.metrics_snapshot_from_prefetched_batches(
+                    shared_batches
+                )
+                center_objectives_F = np.asarray(
+                    train_batch_metrics["loss_item"], dtype=np.float64
+                )
                 run_test = test_dataloaders is not None and _moea_should_run_full_test(
-                    it, num_iterations, evo_eval_freq
+                    iteration, num_iterations, evo_eval_freq
                 )
                 if run_test:
-                    _m_test = self.test(
+                    test_metrics = self.test(
                         test_dataloaders,
                         epoch=None,
                         mode="test",
-                        wandb_log_step=wandb_step_offset + it,
+                        wandb_log_step=wandb_step_offset + iteration,
                         suppress_display=True,
                         return_metrics=True,
                     )
                     self.print_compact_train_test_line(
-                        _train_snap,
-                        _m_test,
-                        epoch_label=it + 1,
+                        train_batch_metrics,
+                        test_metrics,
+                        epoch_label=iteration + 1,
                     )
                 else:
                     parts = " | ".join(
-                        f"{task}: {float(_train_snap['loss_item'][i]):.4f}"
+                        f"{task}: {float(train_batch_metrics['loss_item'][i]):.4f}"
                         for i, task in enumerate(self.task_name)
                     )
-                    print(f"[EvoMTL] Pareto z TRAIN (curr batch) it {it + 1:04d} | {parts}", flush=True)
+                    print(
+                        f"[EvoMTL] Pareto z TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
+                        flush=True,
+                    )
 
-        pf_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
-        ps_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
-        if len(pf_cut) == 0:
+            if _moea_should_run_full_test(iteration, num_iterations, evo_eval_freq):
+                self._wandb_log_evo_objective_plot(
+                    population_F=solutions_F,
+                    pareto_F=pareto_front_cut,
+                    center_F=center_objectives_F,
+                    offspring_F=None,
+                    step=wandb_step_offset + iteration,
+                )
+
+        pareto_front_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
+        pareto_set_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
+        if len(pareto_front_cut) == 0:
             raise RuntimeError("comocma returned an empty Pareto front.")
 
-        w = marginal_hypervolume_weights(
-            pf_cut,
+        hv_weights = marginal_hypervolume_weights(
+            pareto_front_cut,
             ref_point=hv_ref_point,
             aggregation=hv_center_aggregation,
             softmax_temperature=hv_softmax_temperature,
         )
         if hv_ref_point is None:
-            hv_ref_point = _default_hv_ref_point(pf_cut)
-        z_center = pareto_center_from_weights(ps_cut, w)
+            hv_ref_point = _default_hv_ref_point(pareto_front_cut)
+        pareto_center_X = pareto_center_from_weights(pareto_set_cut, hv_weights)
 
-        self.adapt_parameters(z_center)
+        self.adapt_parameters(pareto_center_X)
         out = {
             "method": "COMO-CMA-ES",
             "moes": moes,
-            "pareto_F": pf_cut,
-            "pareto_X": ps_cut,
-            "hv_weights": w,
-            "z_center": z_center,
+            "pareto_F": pareto_front_cut,
+            "pareto_X": pareto_set_cut,
+            "hv_weights": hv_weights,
+            "pareto_center_X": pareto_center_X,
             "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
             "hv_center_aggregation": hv_center_aggregation,
             "hv_softmax_temperature": float(hv_softmax_temperature),
@@ -1134,7 +1304,7 @@ class EvoMTLTrainer(Trainer):
 
         ``theta_0`` is the model at initialization (after any ``load_path`` restore).
         After MOEA, :meth:`adapt_parameters` leaves the network at the Pareto-center
-        ``theta_0 + adapter.forward(z_center, ...)``; gradient steps then update all parameters freely
+        ``theta_0 + adapter.forward(pareto_center_X, ...)``; gradient steps then update all parameters freely
         (parameter sharing is not used during GD).
 
         Checkpoints: ``evo_result.pt`` and ``model_evo.pt`` are written after the MOEA
@@ -1179,16 +1349,16 @@ class EvoMTLTrainer(Trainer):
             raise ValueError(f"Unknown moea backend: {moea}")
 
         if getattr(self, "_wandb_enabled", False):
-            zc = np.asarray(evo_out["z_center"], dtype=np.float64).reshape(-1)
+            zc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1)
             self._wandb_log(
-                {"evo/final_z_center_l2": float(np.linalg.norm(zc))},
+                {"evo/final_pareto_center_X_l2": float(np.linalg.norm(zc))},
                 step=post_evo_step,
             )
 
         if moea_key not in ("comocma", "mocma", "mo-cma-es"):
             self.print_pareto_front_objective_stats(evo_out["pareto_F"])
 
-        m_train = self.test(
+        train_eval_metrics = self.test(
             train_dataloaders,
             epoch=None,
             mode="train",
@@ -1197,7 +1367,7 @@ class EvoMTLTrainer(Trainer):
             suppress_display=True,
             return_metrics=True,
         )
-        m_test = self.test(
+        test_eval_metrics = self.test(
             test_dataloaders,
             epoch=None,
             mode="test",
@@ -1206,8 +1376,8 @@ class EvoMTLTrainer(Trainer):
             return_metrics=True,
         )
         self.print_compact_train_test_line(
-            m_train,
-            m_test,
+            train_eval_metrics,
+            test_eval_metrics,
             epoch_label=post_evo_step,
         )
 
@@ -1216,7 +1386,7 @@ class EvoMTLTrainer(Trainer):
             torch.save(
                 {
                     "theta_0": self.theta_0,
-                    "z_center": torch.as_tensor(evo_out["z_center"]),
+                    "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"]),
                     "pareto_F": evo_out["pareto_F"],
                     "pareto_X": evo_out["pareto_X"],
                     "hv_weights": evo_out["hv_weights"],
@@ -1337,9 +1507,9 @@ class EvoMTLTrainer(Trainer):
             raise ValueError(f"Unknown moea backend: {moea}")
 
         if getattr(self, "_wandb_enabled", False):
-            zc = np.asarray(evo_out["z_center"], dtype=np.float64).reshape(-1)
+            zc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1)
             self._wandb_log(
-                {"evo/final_z_center_l2": float(np.linalg.norm(zc))},
+                {"evo/final_pareto_center_X_l2": float(np.linalg.norm(zc))},
                 step=post_evo_step,
             )
 
@@ -1348,7 +1518,7 @@ class EvoMTLTrainer(Trainer):
         if moea_key not in ("comocma", "mocma", "mo-cma-es"):
             self.print_pareto_front_objective_stats(evo_out["pareto_F"])
 
-        m_train = self.test(
+        train_eval_metrics = self.test(
             train_dataloaders,
             epoch=None,
             mode="train",
@@ -1357,7 +1527,7 @@ class EvoMTLTrainer(Trainer):
             suppress_display=True,
             return_metrics=True,
         )
-        m_test = self.test(
+        test_eval_metrics = self.test(
             test_dataloaders,
             epoch=None,
             mode="test",
@@ -1366,8 +1536,8 @@ class EvoMTLTrainer(Trainer):
             return_metrics=True,
         )
         self.print_compact_train_test_line(
-            m_train,
-            m_test,
+            train_eval_metrics,
+            test_eval_metrics,
             epoch_label=post_evo_step,
         )
 
@@ -1376,7 +1546,7 @@ class EvoMTLTrainer(Trainer):
             torch.save(
                 {
                     "theta_0": self.theta_0,
-                    "z_center": torch.as_tensor(evo_out["z_center"]),
+                    "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"]),
                     "pareto_F": evo_out["pareto_F"],
                     "pareto_X": evo_out["pareto_X"],
                     "hv_weights": evo_out["hv_weights"],
@@ -1401,7 +1571,7 @@ def pareto_center_solution(
     hv_center_aggregation: str = "linear",
     hv_softmax_temperature: float = 1.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Utility: Pareto front + HV weights + center ``z`` (no model side effects)."""
+    """Utility: Pareto front + HV weights + center ``pareto_center_X`` (no model side effects)."""
     F = np.atleast_2d(F)
     X = np.atleast_2d(X)
     idx = pareto_front_indices(F)
@@ -1413,5 +1583,5 @@ def pareto_center_solution(
         aggregation=hv_center_aggregation,
         softmax_temperature=hv_softmax_temperature,
     )
-    z_c = pareto_center_from_weights(X_nd, w)
-    return z_c, w
+    pareto_center_X = pareto_center_from_weights(X_nd, w)
+    return pareto_center_X, w
