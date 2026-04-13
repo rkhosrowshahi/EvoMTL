@@ -1,0 +1,54 @@
+# EvoMTL — MOEA only (moea_then_gd with epochs=0).
+# No GD phase; the model is evaluated after MOEA search finishes.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Architecture
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0
+
+# EvoMTL (NSGA-II only, no subsequent GD)
+evo_training: true
+evo_schedule: moea_then_gd
+evo_moea: nsga2
+evo_adapter: flatten_lora
+evo_adapter_alpha: 1.0
+evo_adapter_r: 8
+evo_adapter_seed: 42
+evo_iterations: 23500
+evo_num_batches: 1
+evo_seed: 1
+evo_pop_size: 200
+evo_lb: -1.0
+evo_ub: 1.0
+evo_eval_freq: 50
+evo_crossover_prob: 0.9
+evo_crossover_eta: 10.0
+evo_mutation_prob: 0.9
+evo_mutation_eta: 10.0
+evo_hv_ref_point: [2.3, 2.3]
+evo_hv_center_aggregation: linear
+evo_hv_softmax_temperature: 1.0
+
+# Paths
+save_path: logs/fashion/only_moea-nsga2-lora-rank_8/alpha_1.0/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: only_moea-nsga2-lora-rank_8-alpha_1.0-seed1
+wandb_group: only_moea-nsga2-lora-rank_8

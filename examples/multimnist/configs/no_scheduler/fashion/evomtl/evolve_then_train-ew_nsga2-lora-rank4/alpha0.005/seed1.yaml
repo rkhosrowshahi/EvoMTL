@@ -1,0 +1,64 @@
+# EvoMTL — MOEA-first (moea_then_gd): NSGA-II on parameter-sharing z from initial
+# weights, Pareto-center theta, then full-parameter GD for `epochs`.
+# Pairs with evomtl-ew_nsga2-lora/rank4 (gd_then_moea) for the same MOEA + GD budgets.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Architecture
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 30
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-4
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+# EvoMTL (NSGA-II first, then supervised epochs above)
+evo_training: true
+evo_schedule: moea_then_gd
+evo_moea: nsga2
+evo_adapter: flatten_lora
+evo_adapter_alpha: 0.005
+evo_adapter_r: 4
+evo_adapter_seed: 42
+evo_iterations: 2500
+evo_num_batches: 1
+evo_seed: 1
+evo_pop_size: 200
+evo_lb: -1.0
+evo_ub: 1.0
+evo_eval_freq: 50
+evo_crossover_prob: 0.9
+evo_crossover_eta: 10.0
+evo_mutation_prob: 0.9
+evo_mutation_eta: 10.0
+evo_hv_ref_point: [2.3, 2.3]
+evo_hv_center_aggregation: linear
+evo_hv_softmax_temperature: 1.0
+
+# Paths
+save_path: logs/fashion/evolve_then_train-ew_nsga2-lora-rank_4/alpha_0.005/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: evolve_then_train-ew+nsga2-lora-rank_4-alpha_0.005-seed1
+wandb_group: evolve_then_train-ew+nsga2-lora-rank_4
