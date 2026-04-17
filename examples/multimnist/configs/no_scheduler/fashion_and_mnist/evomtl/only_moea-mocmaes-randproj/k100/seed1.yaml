@@ -1,0 +1,53 @@
+# EvoMTL — MOEA only (moea_then_gd with epochs=0).
+# No GD phase; the model is evaluated after MOEA search finishes.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Architecture
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: fashion_and_mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0
+
+# EvoMTL (COMO-CMA-ES / comocma, no subsequent GD)
+evo_training: true
+evo_schedule: moea_then_gd
+evo_adapter: layerwise_random_proj
+evo_adapter_alpha: 1.0
+evo_adapter_k: 100
+evo_adapter_seed: 42
+evo_iterations: 117500
+evo_num_batches: 1
+evo_seed: 1
+evo_moea: comocma
+evo_sofomore_reference_point: [100.0, 100.0]
+evo_cma_num_kernels: 10
+evo_cma_sigma0: 0.1
+evo_pop_size: 23
+evo_lb: -1.0
+evo_ub: 1.0
+evo_eval_freq: 50
+evo_hv_ref_point: [3.3, 3.3]
+evo_hv_center_aggregation: linear
+evo_hv_softmax_temperature: 1.0
+
+# Paths
+save_path: logs/fashion_and_mnist/only_moea-mocmaes-randproj/k_100/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: only_moea-mocmaes-randproj-k_100-seed1
+wandb_group: only_moea-mocmaes-randproj-k_100

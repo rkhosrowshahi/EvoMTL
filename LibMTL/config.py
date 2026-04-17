@@ -134,8 +134,12 @@ _parser.add_argument(
     help='EvoMTL parameter-sharing adapter: random_proj, layerwise_random_proj, layerwise_scaled_random_proj, '
          'flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora, spectral_all_svd',
 )
-_parser.add_argument('--evo_moea', type=str, default='nsga2',
-                    help='nsga2, mopso (MOPSO-CD in pymoo), or comocma (two tasks only for comocma)')
+_parser.add_argument(
+    '--evo_moea',
+    type=str,
+    default='nsga2',
+    help='nsga2, mopso (MOPSO-CD in pymoo), or comocma (two tasks only for comocma)',
+)
 _parser.add_argument(
     '--evo_adapter_alpha',
     type=float,
