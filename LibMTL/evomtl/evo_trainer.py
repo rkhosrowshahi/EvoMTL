@@ -88,6 +88,7 @@ from .moea.hv import (
 )
 from .moea.mopso import run_mopso
 from .moea.nsga2 import run_nsga2
+from .moea.snsga2 import run_snsga2
 
 
 class EvoMTLTrainer(Trainer):
@@ -95,7 +96,7 @@ class EvoMTLTrainer(Trainer):
 
     After GD warmup, call :meth:`init_parameter_sharing` (or rely on it from
     :meth:`prepare_evolution`) then MOEA runners in :mod:`LibMTL.evomtl.moea` (e.g.
-    :func:`~LibMTL.evomtl.moea.nsga2.run_nsga2`).
+    :func:`~LibMTL.evomtl.moea.nsga2.run_nsga2`, :func:`~LibMTL.evomtl.moea.snsga2.run_snsga2`).
 
     Notes
     -----
@@ -641,6 +642,10 @@ class EvoMTLTrainer(Trainer):
             evo_out = run_nsga2(
                 self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
             )
+        elif moea_key in ("snsga2", "stochastic_nsga2", "stochastic-nsga2"):
+            evo_out = run_snsga2(
+                self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
+            )
         elif moea_key in ("mopso", "mopso_cd", "mopso-cd"):
             evo_out = run_mopso(
                 self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
@@ -757,10 +762,10 @@ class EvoMTLTrainer(Trainer):
         Parameters
         ----------
         moea : str
-            ``"nsga2"``, ``"mopso"`` / ``"mopso_cd"``, or ``"comocma"``.
+            ``"nsga2"``, ``"snsga2"`` / ``"stochastic_nsga2"``, ``"mopso"`` / ``"mopso_cd"``, or ``"comocma"``.
         evo_kwargs : dict
             Passed to :func:`~LibMTL.evomtl.moea.nsga2.run_nsga2`,
-            :func:`~LibMTL.evomtl.moea.mopso.run_mopso`,
+            :func:`~LibMTL.evomtl.moea.snsga2.run_snsga2`, :func:`~LibMTL.evomtl.moea.mopso.run_mopso`,
             or :func:`~LibMTL.evomtl.moea.comocma.run_comocma` (first arg is this trainer).
         """
         evo_kwargs = dict(evo_kwargs or {})
@@ -807,6 +812,10 @@ class EvoMTLTrainer(Trainer):
             evo_out = run_nsga2(
                 self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
             )
+        elif moea_key in ("snsga2", "stochastic_nsga2", "stochastic-nsga2"):
+            evo_out = run_snsga2(
+                self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
+            )
         elif moea_key in ("mopso", "mopso_cd", "mopso-cd"):
             evo_out = run_mopso(
                 self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
@@ -825,7 +834,7 @@ class EvoMTLTrainer(Trainer):
                 step=post_evo_step,
             )
 
-        # Pareto-center weights are already applied in run_nsga2 / run_mopso / run_comocma.
+        # Pareto-center weights are already applied in run_nsga2 / run_snsga2 / run_mopso / run_comocma.
         # COMO-CMA prints ref-cut Pareto stats each iteration; pymoo MOEAs only here.
         if moea_key not in ("comocma", "mocma", "mo-cma-es"):
             self.print_pareto_front_objective_stats(evo_out["pareto_F"])

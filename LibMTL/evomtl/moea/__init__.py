@@ -10,6 +10,7 @@ from .hv import (
 )
 from .mopso import run_mopso
 from .nsga2 import run_nsga2
+from .snsga2 import run_snsga2
 
 __all__ = [
     "marginal_hypervolume_weights",
@@ -20,4 +21,5 @@ __all__ = [
     "run_comocma",
     "run_mopso",
     "run_nsga2",
+    "run_snsga2",
 ]

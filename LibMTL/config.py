@@ -138,7 +138,7 @@ _parser.add_argument(
     '--evo_moea',
     type=str,
     default='nsga2',
-    help='nsga2, mopso (MOPSO-CD in pymoo), or comocma (two tasks only for comocma)',
+    help='nsga2, snsga2 (stochastic NSGA-II), mopso (MOPSO-CD in pymoo), or comocma (two tasks only for comocma)',
 )
 _parser.add_argument(
     '--evo_adapter_alpha',
@@ -204,6 +204,24 @@ _parser.add_argument(
     type=float,
     default=10.0,
     help='NSGA-II polynomial mutation distribution index eta (pymoo PM eta)',
+)
+_parser.add_argument(
+    '--evo_snsga2_beta',
+    type=float,
+    default=0.9,
+    help='SNSGA-II EMA coefficient on raw batch losses (in [0.7, 0.95]; evo_moea=snsga2)',
+)
+_parser.add_argument(
+    '--evo_snsga2_eps_kappa',
+    type=float,
+    default=1.0,
+    help='SNSGA-II multiplier for adaptive per-objective epsilon (evo_moea=snsga2)',
+)
+_parser.add_argument(
+    '--evo_snsga2_eps_var_floor',
+    type=float,
+    default=1e-12,
+    help='SNSGA-II floor under variance in epsilon formula (evo_moea=snsga2)',
 )
 _parser.add_argument(
     '--evo_mopso_w',
@@ -564,6 +582,27 @@ def _make_evo_args(params):
             'crossover_eta': float(params.evo_crossover_eta),
             'mutation_prob': float(params.evo_mutation_prob),
             'mutation_eta': float(params.evo_mutation_eta),
+            **hv_common,
+        }
+        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        if hv is not None:
+            evo_kwargs['hv_ref_point'] = hv
+    elif moea in ('snsga2', 'stochastic_nsga2', 'stochastic-nsga2'):
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'lb': params.evo_lb,
+            'ub': params.evo_ub,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'crossover_prob': float(params.evo_crossover_prob),
+            'crossover_eta': float(params.evo_crossover_eta),
+            'mutation_prob': float(params.evo_mutation_prob),
+            'mutation_eta': float(params.evo_mutation_eta),
+            'fitness_beta': float(params.evo_snsga2_beta),
+            'eps_kappa': float(params.evo_snsga2_eps_kappa),
+            'eps_var_floor': float(params.evo_snsga2_eps_var_floor),
             **hv_common,
         }
         hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
