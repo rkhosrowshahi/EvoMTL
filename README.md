@@ -118,7 +118,7 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/): `pyproject.toml`
    uv sync
    ```
 
-   This creates `.venv` with Python 3.12 (from `.python-version`; uv downloads it if it is missing) and installs all dependencies, plus `LibMTL` in editable mode. On Windows and Linux, torch comes as a CUDA 13.0 build (needs an NVIDIA driver 580 or newer); on macOS, as the standard build.
+   This creates `.venv` with Python 3.12 (from `.python-version`; uv downloads it if it is missing) and installs all dependencies, plus `LibMTL` in editable mode. On Windows and Linux, torch comes as a CUDA 12.6 build (needs an NVIDIA driver 560 or newer); on macOS, as the standard build.
 
 3. Activate it (`source .venv/bin/activate` on macOS/Linux, `.venv\Scripts\activate` on Windows), or prefix commands with `uv run`, e.g. `uv run python main.py --config …`.
 
