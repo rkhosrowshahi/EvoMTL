@@ -1,0 +1,46 @@
+[project]
+name = "LibMTL"
+version = "1.1.5"
+description = "A PyTorch Library for Multi-Task Learning"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Baijiong Lin", email = "bj.lin.email@gmail.com" }]
+requires-python = ">=3.10,<3.13"  # ecos and quadprog ship Windows wheels up to 3.12
+dependencies = [
+    "torch>=2.7",
+    "torchvision>=0.22",
+    "torch-geometric>=2.6",
+    "numpy>=1.20",
+    "scipy>=1.10",
+    "cvxpy>=1.6",
+    "ecos>=2.0.14",       # Nash-MTL solver
+    "qpsolvers>=4.7",
+    "quadprog>=0.1.13",   # UPGrad solver
+    "pymoo>=0.6",
+    "cma>=3.0",
+    "comocma>=0.6",
+    "pyyaml>=6.0",
+    "wandb>=0.25",
+    "matplotlib>=3.7",
+    "tqdm>=4.60",
+]
+
+[project.urls]
+Homepage = "https://github.com/median-research-group/LibMTL"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["LibMTL*"]
+
+# CUDA builds of torch on Windows and Linux, the standard build on macOS.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "sys_platform != 'darwin'" }]
+torchvision = [{ index = "pytorch-cu130", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true

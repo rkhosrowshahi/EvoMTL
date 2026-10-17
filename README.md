@@ -108,27 +108,21 @@ Each module is introduced in [Docs](https://libmtl.readthedocs.io/en/latest/docs
 
 ## Installation
 
-1. Create a virtual environment
-   
+Dependencies are managed with [uv](https://docs.astral.sh/uv/): `pyproject.toml` lists them and `uv.lock` pins the exact versions, so every machine gets the same environment.
+
+1. Install uv (`brew install uv` on macOS; `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"` on Windows).
+
+2. From the repository root, create the environment:
+
    ```shell
-   conda create -n libmtl python=3.8
-   conda activate libmtl
-   pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+   uv sync
    ```
 
-2. Clone the repository
-   
-   ```shell
-   git clone https://github.com/median-research-group/LibMTL.git
-   ```
+   This creates `.venv` with Python 3.12 (from `.python-version`; uv downloads it if it is missing) and installs all dependencies, plus `LibMTL` in editable mode. On Windows and Linux, torch comes as a CUDA 13.0 build (needs an NVIDIA driver 580 or newer); on macOS, as the standard build.
 
-3. Install `LibMTL`
-   
-   ```shell
-   cd LibMTL
-   pip install -r requirements.txt
-   pip install -e .
-   ```
+3. Activate it (`source .venv/bin/activate` on macOS/Linux, `.venv\Scripts\activate` on Windows), or prefix commands with `uv run`, e.g. `uv run python main.py --config …`.
+
+After changing the dependencies in `pyproject.toml`, run `uv lock` and commit `uv.lock`.
 
 ## Quick Start
 
