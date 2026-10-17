@@ -1,0 +1,57 @@
+# Guided-ES-WS: single-objective Guided ES (Maheswaranathan et al., 2019) on the equal-weight sum
+# of the two losses. The guiding subspace is the last k=1 search direction; alpha=0.5 of the noise
+# budget stays isotropic. One centered-rank vector, one pseudo-gradient, Adam on the search mean.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Model (shared LeNet encoder, one head per task)
+weighting: EW                  # gradient-descent loss weighting; unused here (epochs: 0)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0                      # no gradient-descent phase: training is ES only
+
+# Evolution strategy (Guided-ES-WS); evo_moea selects the ES code, evo_es_aggregator ws = sum of losses
+evo_training: true
+evo_schedule: moea_then_gd     # ES first, then `epochs` of gradient descent (none here)
+evo_moea: mo_openes
+evo_adapter: full
+evo_adapter_alpha: 1.0
+evo_iterations: 500
+evo_pop_size: 512
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 1
+evo_es_aggregator: ws
+evo_es_lr: 0.001
+evo_es_optim: adam            # optimizer on the search mean (sgd, adam or rmsprop); evo_es_lr is its learning rate
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.01
+evo_es_sigma_decay: 1.0
+evo_es_sigma_min: 0.0
+evo_es_antithetic: true
+evo_es_guided_k: 1            # number of past search directions spanning the guiding subspace
+evo_es_guided_alpha: 0.5      # fraction of the noise budget kept isotropic
+evo_es_grad_cos_freq: 1       # log cosine(pseudo-gradient, backprop gradient); 0 = off
+
+# Paths
+save_path: logs/mnist/guided_es-ws-full/pop_512/adam-lr_1e-3/seed_1-k1_a0.5/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: guided_es-ws-full-k1_a0.5-pop_512-adam-lr_0.001-seed1
+wandb_group: guided_es-ws-full-k1_a0.5-pop_512-adam-lr_0.001

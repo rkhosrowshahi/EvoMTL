@@ -9,3 +9,10 @@ archive/
 outsofomore/
 cma_kernels/
 notebooks/
+figures/
+reports/
+# macOS
+.DS_Store
+
+# Weights & Biases local run files
+wandb/

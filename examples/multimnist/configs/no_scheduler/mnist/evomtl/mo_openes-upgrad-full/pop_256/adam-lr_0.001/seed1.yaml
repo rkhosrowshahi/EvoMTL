@@ -1,0 +1,52 @@
+# MO-OpenES (upgrad): per-objective OpenES pseudo-gradients -> UPGrad (mean of dual-cone projections)
+# Pure ES training in weight space (adapter: full); epochs: 0 disables the GD phase.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Architecture
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+upgrad_norm_eps: 0.0001
+upgrad_reg_eps: 0.0001
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0
+
+# EvoMTL / MO-OpenES
+evo_training: true
+evo_schedule: moea_then_gd
+evo_moea: mo_openes
+evo_adapter: full
+evo_adapter_alpha: 1.0
+evo_iterations: 5000
+evo_pop_size: 256
+evo_num_batches: 1
+evo_eval_freq: 100
+evo_seed: 1
+evo_es_aggregator: upgrad
+evo_es_lr: 0.001
+evo_es_sigma: 0.01
+evo_es_sigma_decay: 1.0
+evo_es_sigma_min: 0.0
+evo_es_antithetic: true
+evo_es_grad_cos_freq: 1      # log cosine(pseudo-gradient, backprop gradient); 0 = off
+
+# Paths
+save_path: logs/mnist/mo_openes-upgrad-full/pop_256/lr_0.001/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_project: mtl
+wandb_name: mo_openes-upgrad-full-pop_256-lr_0.001-seed1
+wandb_group: mo_openes-upgrad-full-pop_256-lr_0.001

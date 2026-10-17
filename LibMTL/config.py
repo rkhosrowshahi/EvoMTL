@@ -23,6 +23,8 @@ _parser.add_argument('--save_path', type=str, default=None,
 _parser.add_argument('--load_path', type=str, default=None, 
                     help='load ckpt path')
 ## Weights & Biases (passed to :class:`LibMTL.trainer.Trainer` as ``wandb_init``)
+_parser.add_argument('--wandb_enable', action='store_true', default=False,
+                    help='log to wandb (needs --wandb_project); off unless this flag is given')
 _parser.add_argument('--wandb_project', type=str, default=None,
                     help='wandb project name; logging is disabled when unset')
 _parser.add_argument('--wandb_name', type=str, default=None,
@@ -131,14 +133,17 @@ _parser.add_argument(
     '--evo_adapter',
     type=str,
     default='spherical_lora',
-    help='EvoMTL parameter-sharing adapter: random_proj, layerwise_random_proj, layerwise_scaled_random_proj, '
-         'flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora, spectral_all_svd',
+    help='EvoMTL parameter-sharing adapter: full (z = delta theta), random_proj, layerwise_random_proj, '
+         'layerwise_scaled_random_proj, flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora, spectral_all_svd',
 )
 _parser.add_argument(
     '--evo_moea',
     type=str,
     default='nsga2',
-    help='nsga2, mopso (MOPSO-CD in pymoo), or comocma (two tasks only for comocma)',
+    help='nsga2, mopso (MOPSO-CD in pymoo), comocma (two tasks only), mo_openes '
+         '(per-objective OpenES pseudo-gradients aggregated by --evo_es_aggregator, Adam on the mean), or psl_es '
+         '(Pareto set learning with OpenES: one run learns preference-conditioned networks; uses the --evo_es_* '
+         'and --evo_psl_* flags)',
 )
 _parser.add_argument(
     '--evo_adapter_alpha',
@@ -255,6 +260,76 @@ _parser.add_argument('--evo_cma_tolstagnation', type=float, default=None,
                     help='COMO-CMA CMA tolstagnation (0 disables)')
 _parser.add_argument('--evo_cma_tolflatfitness', type=float, default=None,
                     help='COMO-CMA CMA tolflatfitness')
+_parser.add_argument('--evo_es_lr', type=float, default=1e-3,
+                    help='MO-OpenES: Adam learning rate for the search-distribution mean')
+_parser.add_argument('--evo_es_sigma', type=float, default=0.01,
+                    help='MO-OpenES: perturbation std sigma (in z units)')
+_parser.add_argument('--evo_es_sigma_decay', type=float, default=1.0,
+                    help='MO-OpenES: multiply sigma by this after every iteration (1.0 = constant)')
+_parser.add_argument('--evo_es_sigma_min', type=float, default=0.0,
+                    help='MO-OpenES: lower bound on sigma when decaying')
+_parser.add_argument(
+    '--evo_es_aggregator',
+    type=str,
+    default='upgrad',
+    choices=('upgrad', 'mean', 'ws'),
+    help='MO-OpenES: upgrad = average of per-objective pseudo-gradients projected onto the dual cone; '
+         'mean = plain average of per-objective pseudo-gradients; ws = standard OpenES on the sum of losses.',
+)
+_parser.add_argument('--upgrad_norm_eps', type=float, default=0.0001,
+                    help='MO-OpenES (aggregator upgrad): epsilon when normalising the Jacobian Gramian')
+_parser.add_argument('--upgrad_reg_eps', type=float, default=0.0001,
+                    help='MO-OpenES (aggregator upgrad): diagonal regulariser on the Jacobian Gramian')
+_parser.add_argument('--evo_es_grad_cos_freq', type=int, default=1,
+                    help='MO-OpenES diagnostic: every N generations log cosine(pseudo-gradient, backprop gradient) '
+                         'per task and for the aggregated direction; 0 disables')
+_parser.add_argument('--evo_es_grad_save_freq', type=int, default=0,
+                    help='MO-OpenES diagnostic: every N generations (from initialization) save true and '
+                         'pseudo-gradients to <save_path>/gradients.pth.tar; 0 disables')
+_parser.add_argument('--evo_es_optim', type=str, default='adam', choices=('sgd', 'adam', 'rmsprop'),
+                    help='MO-OpenES: optimizer on the search mean (evo_es_lr is its learning rate)')
+_parser.add_argument('--evo_es_adam_beta1', type=float, default=0.9, help='MO-OpenES Adam beta1')
+_parser.add_argument('--evo_es_adam_beta2', type=float, default=0.999, help='MO-OpenES Adam beta2')
+_parser.add_argument('--evo_es_adam_eps', type=float, default=1e-8, help='MO-OpenES Adam epsilon')
+_parser.add_argument('--evo_es_rmsprop_alpha', type=float, default=0.99,
+                    help='MO-OpenES RMSprop smoothing constant for the squared-gradient average')
+_parser.add_argument('--evo_es_rmsprop_eps', type=float, default=1e-8, help='MO-OpenES RMSprop epsilon')
+_parser.add_argument('--evo_es_guided_k', type=int, default=0,
+                    help='MO-OpenES Guided ES: number of past ES directions spanning the guiding subspace; 0 = off')
+_parser.add_argument('--evo_es_guided_alpha', type=float, default=0.5,
+                    help='MO-OpenES Guided ES: fraction of the noise budget kept isotropic (1 = plain OpenES)')
+_parser.add_argument('--evo_es_guided_sigma', type=float, default=0.0,
+                    help='MO-OpenES Guided ES: perturbation size along each guiding direction; 0 = sigma*sqrt((1-alpha)D/k)')
+_parser.add_argument('--evo_es_guided_ema', type=float, default=0.0,
+                    help='MO-OpenES Guided ES: guide with a moving average of past directions (decay); 0 = last k directions')
+_parser.add_argument('--evo_psl_params', type=str, default='all',
+                    help="PSL-OpenES (evo_moea=psl_es): parameters that depend on the preference: all, or "
+                         "comma-separated name prefixes such as 'encoder.fc,decoders'")
+_parser.add_argument('--evo_psl_scalarization', type=str, default='tch', choices=('tch', 'ws', 'hv'),
+                    help='PSL-OpenES: score of a member under its preference lam: tch = Chebyshev max_k lam_k l_k, '
+                         'ws = weighted sum sum_k lam_k l_k, hv = Chebyshev distance inside the box of '
+                         '--evo_hv_ref_point along the preference direction (hypervolume score, two tasks)')
+_parser.add_argument('--evo_psl_center_a', type=float, default=1.0,
+                    help='PSL-OpenES: in the update of the shared delta z (the balanced network), weight each pair by the '
+                         'Beta(a, a) density of its preference lam_1 (Dirichlet(a) for more tasks); 1 = equal weights')
+_parser.add_argument('--evo_psl_spread_score', type=str, default='same', choices=('same', 'ideal', 'hv'),
+                    help='PSL-OpenES: scores ranked for the update of the steering matrix B: same (the ranks of z), '
+                         'ideal (Chebyshev from each task\'s lowest loss in the population minus '
+                         '--evo_psl_ideal_margin) or hv (hypervolume score from --evo_hv_ref_point)')
+_parser.add_argument('--evo_psl_ideal_margin', type=float, default=0.1,
+                    help='PSL-OpenES: margin below the lowest population losses for --evo_psl_spread_score ideal')
+_parser.add_argument('--evo_psl_guide', type=str, default='update', choices=('update', 'tasks'),
+                    help='PSL-OpenES with Guided ES sampling (--evo_es_guided_k > 0): guiding subspace from a moving '
+                         'average of past updates (update) or from per-task, per-region directions along the family '
+                         '(tasks); --evo_es_guided_ema is the decay of those directions')
+_parser.add_argument('--evo_psl_rank_groups', type=int, default=1,
+                    help='PSL-OpenES: rank the pair differences within this many groups of neighbouring preferences '
+                         'instead of across all pairs (1); use > 1 with the hv score')
+_parser.add_argument('--evo_psl_eval_points', type=int, default=11,
+                    help='PSL-OpenES: preferences per simplex edge on which the front is evaluated '
+                         '(11: lam_1 = 0, 0.1, ..., 1)')
+_parser.add_argument('--evo_es_antithetic', action=argparse.BooleanOptionalAction, default=True,
+                    help='MO-OpenES: mirrored sampling (eps, -eps); needs an even --evo_pop_size (--no-evo_es_antithetic to disable)')
 _parser.add_argument(
     '--evo_sofomore_reference_point',
     nargs='*',
@@ -471,7 +546,7 @@ def _build_wandb_config(params, kwargs, optim_param, scheduler_param):
 def _make_wandb_init(params, kwargs, optim_param, scheduler_param):
     """Build ``wandb_init`` for :meth:`LibMTL.trainer.Trainer` from CLI args."""
     project = getattr(params, 'wandb_project', None)
-    if not project:
+    if not project or not getattr(params, 'wandb_enable', False):
         return None
     out = {
         'project': project,
@@ -532,7 +607,9 @@ def _make_evo_args(params):
     adapter_key = params.evo_adapter.strip().lower().replace('-', '_')
 
     adapter_kwargs = {'seed': params.evo_adapter_seed}
-    if adapter_key in (
+    if adapter_key == 'full':
+        pass
+    elif adapter_key in (
         'random_proj',
         'layerwise_random_proj',
         'layerwise_random_blocking',
@@ -607,6 +684,66 @@ def _make_evo_args(params):
         hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
         if hv is not None:
             evo_kwargs['hv_ref_point'] = hv
+    elif moea in ('mo_openes', 'mo-openes', 'openes'):
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'lr': float(params.evo_es_lr),
+            'sigma': float(params.evo_es_sigma),
+            'sigma_decay': float(params.evo_es_sigma_decay),
+            'sigma_min': float(params.evo_es_sigma_min),
+            'aggregator': str(params.evo_es_aggregator).strip().lower(),
+            'antithetic': bool(params.evo_es_antithetic),
+            'grad_cos_freq': int(params.evo_es_grad_cos_freq),
+            'grad_save_freq': int(params.evo_es_grad_save_freq),
+            'guided_k': int(params.evo_es_guided_k),
+            'optim': str(params.evo_es_optim),
+            'adam_betas': (float(params.evo_es_adam_beta1), float(params.evo_es_adam_beta2)),
+            'adam_eps': float(params.evo_es_adam_eps),
+            'rmsprop_alpha': float(params.evo_es_rmsprop_alpha),
+            'rmsprop_eps': float(params.evo_es_rmsprop_eps),
+            'guided_alpha': float(params.evo_es_guided_alpha),
+            'guided_sigma': float(params.evo_es_guided_sigma),
+            'guided_ema': float(params.evo_es_guided_ema),
+            'upgrad_norm_eps': float(params.upgrad_norm_eps),
+            'upgrad_reg_eps': float(params.upgrad_reg_eps),
+        }
+    elif moea in ('psl_es', 'psl-es'):
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'lr': float(params.evo_es_lr),
+            'sigma': float(params.evo_es_sigma),
+            'sigma_decay': float(params.evo_es_sigma_decay),
+            'sigma_min': float(params.evo_es_sigma_min),
+            'scalarization': str(params.evo_psl_scalarization).strip().lower(),
+            'psl_params': str(params.evo_psl_params),
+            'eval_points': int(params.evo_psl_eval_points),
+            'center_a': float(params.evo_psl_center_a),
+            'spread_score': str(params.evo_psl_spread_score).strip().lower(),
+            'ideal_margin': float(params.evo_psl_ideal_margin),
+            'rank_groups': int(params.evo_psl_rank_groups),
+            'psl_guide': str(params.evo_psl_guide).strip().lower(),
+            'antithetic': bool(params.evo_es_antithetic),
+            'optim': str(params.evo_es_optim),
+            'adam_betas': (float(params.evo_es_adam_beta1), float(params.evo_es_adam_beta2)),
+            'adam_eps': float(params.evo_es_adam_eps),
+            'rmsprop_alpha': float(params.evo_es_rmsprop_alpha),
+            'rmsprop_eps': float(params.evo_es_rmsprop_eps),
+            'guided_k': int(params.evo_es_guided_k),
+            'guided_alpha': float(params.evo_es_guided_alpha),
+            'guided_sigma': float(params.evo_es_guided_sigma),
+            'guided_ema': float(params.evo_es_guided_ema),
+        }
+        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
+            evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
     else:
         raise ValueError('Unsupported evo_moea {}'.format(params.evo_moea))
 

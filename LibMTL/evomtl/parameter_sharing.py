@@ -103,6 +103,41 @@ class RandomProjection:
         return self.process(x, alpha=alpha)
 
 
+class FullParameters:
+    """Identity map: ``z`` is the full parameter delta (``num_dims == N``), ``z0 = 0``.
+
+    Use for search directly in weight space (e.g. OpenES-style training of all parameters).
+    """
+
+    def __init__(self, model, device="cuda", seed=42, **kwargs):
+        self.model = model
+        self.base_params = torch.nn.utils.parameters_to_vector(self.model.parameters())
+        self.N = len(self.base_params)
+        self.device = device
+        self.num_dims = self.N
+        self.z0 = self._init_z0()
+        print(f"FullParameters: z dim = {self.num_dims} | model params = {self.N}")
+
+    def _init_z0(self):
+        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+
+    def expand(self, z):
+        return _z_to_torch_cpu(z)
+
+    def process(self, x, alpha=1.0):
+        if not isinstance(x, torch.Tensor):
+            x = torch.as_tensor(x, dtype=torch.float32, device=self.device)
+        return alpha * x.to(self.device)
+
+    def load_parameters_to_model(self, parameters):
+        if not isinstance(parameters, torch.Tensor):
+            parameters = torch.as_tensor(parameters, dtype=torch.float32, device=self.device)
+        torch.nn.utils.vector_to_parameters(parameters.to(self.device), self.model.parameters())
+
+    def forward(self, z, alpha=1.0):
+        return self.process(self.expand(z), alpha=alpha)
+
+
 class LayerwiseRandomProjection:
     """Layer-wise random projection with direct bias evolution.
 

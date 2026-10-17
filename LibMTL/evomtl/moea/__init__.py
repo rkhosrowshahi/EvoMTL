@@ -8,8 +8,10 @@ from .hv import (
     pareto_center_weights_from_marginal_hv,
     pareto_front_indices,
 )
+from .mo_openes import run_mo_openes
 from .mopso import run_mopso
 from .nsga2 import run_nsga2
+from .psl_es import run_psl_es
 
 __all__ = [
     "marginal_hypervolume_weights",
@@ -18,6 +20,8 @@ __all__ = [
     "pareto_center_weights_from_marginal_hv",
     "pareto_front_indices",
     "run_comocma",
+    "run_mo_openes",
     "run_mopso",
     "run_nsga2",
+    "run_psl_es",
 ]

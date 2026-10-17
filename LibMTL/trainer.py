@@ -84,7 +84,7 @@ class Trainer(nn.Module):
                  save_path=None, load_path=None, wandb_init=None, **kwargs):
         super(Trainer, self).__init__()
         
-        self.device = torch.device('cuda:0')
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.kwargs = kwargs
         self.task_dict = task_dict
         self.task_num = len(task_dict)

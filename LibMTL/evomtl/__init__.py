@@ -1,5 +1,6 @@
 from .parameter_sharing import (
     RandomProjection,
+    FullParameters,
     LayerwiseRandomBlocking,
     LayerwiseRandomProjection,
     LayerwiseScaledRandomProjection,
@@ -22,6 +23,7 @@ def __getattr__(name):
 
 __all__ = [
     "RandomProjection",
+    "FullParameters",
     "LayerwiseRandomBlocking",
     "LayerwiseRandomProjection",
     "LayerwiseScaledRandomProjection",

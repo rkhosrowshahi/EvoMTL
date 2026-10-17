@@ -7,7 +7,8 @@ Default schedule (``gd_then_moea``, :meth:`EvoMTLTrainer.train_then_evolve`):
    ``theta = theta_0 + adapter.forward(z, alpha=evo_adapter_alpha)`` (``alpha`` scales ``delta_theta``
    inside :meth:`~LibMTL.evomtl.parameter_sharing` ``process``; config ``evo_adapter_alpha``
    maps to :attr:`adapter_alpha` on the trainer).
-3. Run NSGA-II, stochastic NSGA-II (SNSGA-II), MOPSO-CD (pymoo), or COMO-CMA-ES / MO-CMA-ES (comocma) with an ask-and-tell loop.
+3. Run NSGA-II, stochastic NSGA-II (SNSGA-II), MOPSO-CD (pymoo), COMO-CMA-ES / MO-CMA-ES (comocma),
+   or MO-OpenES (per-objective OpenES pseudo-gradients aggregated with UPGrad) with an ask-and-tell loop.
 4. Form a *Pareto-center* latent vector by averaging Pareto-set points weighted by
    marginal hypervolume contribution, apply it, then evaluate train and test (same
    path as :meth:`Trainer.test`) and save.
@@ -42,6 +43,7 @@ from ..trainer import Trainer
 from .parameter_sharing import (
     DictLoRA,
     FlattenLoRA,
+    FullParameters,
     LayerwiseRandomBlocking,
     LayerwiseRandomProjection,
     LayerwiseScaledRandomProjection,
@@ -54,6 +56,7 @@ from .parameter_sharing import (
 )
 
 EVO_PS_REGISTRY = {
+    "full": FullParameters,
     "random_proj": RandomProjection,
     "layerwise_random_proj": LayerwiseRandomProjection,
     "layerwise_random_blocking": LayerwiseRandomBlocking,
@@ -86,8 +89,13 @@ from .moea.hv import (
     pareto_center_weights_from_marginal_hv,
     pareto_front_indices,
 )
+from .moea.mo_openes import run_mo_openes
 from .moea.mopso import run_mopso
+from .moea.psl_es import run_psl_es
 from .moea.nsga2 import run_nsga2
+
+MO_OPENES_KEYS = ("mo_openes", "mo-openes", "openes")
+PSL_ES_KEYS = ("psl_es", "psl-es")
 
 
 class EvoMTLTrainer(Trainer):
@@ -591,6 +599,30 @@ class EvoMTLTrainer(Trainer):
             )
         print(f"[EvoMTL] {line_label} | " + " | ".join(parts), flush=True)
 
+    def _run_moea(
+        self,
+        moea_key: str,
+        train_dataloaders: Any,
+        test_dataloaders: Any,
+        evo_kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Dispatch to the MOEA / ES backend named by ``moea_key``."""
+        if moea_key == "nsga2":
+            runner = run_nsga2
+        elif moea_key in ("mopso", "mopso_cd", "mopso-cd"):
+            runner = run_mopso
+        elif moea_key in ("comocma", "mocma", "mo-cma-es"):
+            runner = run_comocma
+        elif moea_key in MO_OPENES_KEYS:
+            runner = run_mo_openes
+        elif moea_key in PSL_ES_KEYS:
+            runner = run_psl_es
+        else:
+            raise ValueError(f"Unknown moea backend: {moea_key}")
+        return runner(
+            self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
+        )
+
     def evolve_then_train(
         self,
         train_dataloaders: Any,
@@ -637,20 +669,7 @@ class EvoMTLTrainer(Trainer):
         wandb_base = int(evo_kwargs["wandb_step_offset"])
         post_evo_step = wandb_base + max(0, n_outer)
 
-        if moea_key == "nsga2":
-            evo_out = run_nsga2(
-                self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
-            )
-        elif moea_key in ("mopso", "mopso_cd", "mopso-cd"):
-            evo_out = run_mopso(
-                self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
-            )
-        elif moea_key in ("comocma", "mocma", "mo-cma-es"):
-            evo_out = run_comocma(
-                self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
-            )
-        else:
-            raise ValueError(f"Unknown moea backend: {moea}")
+        evo_out = self._run_moea(moea_key, train_dataloaders, test_dataloaders, evo_kwargs)
 
         if getattr(self, "_wandb_enabled", False):
             zc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1)
@@ -757,7 +776,7 @@ class EvoMTLTrainer(Trainer):
         Parameters
         ----------
         moea : str
-            ``"nsga2"``, ``"mopso"`` / ``"mopso_cd"``, or ``"comocma"``.
+            ``"nsga2"``, ``"mopso"`` / ``"mopso_cd"``, ``"comocma"``, ``"mo_openes"`` or ``"psl_es"``.
         evo_kwargs : dict
             Passed to :func:`~LibMTL.evomtl.moea.nsga2.run_nsga2`,
             :func:`~LibMTL.evomtl.moea.mopso.run_mopso`,
@@ -803,20 +822,7 @@ class EvoMTLTrainer(Trainer):
         wandb_base = int(evo_kwargs["wandb_step_offset"])
         post_evo_step = wandb_base + max(0, n_outer)
 
-        if moea_key == "nsga2":
-            evo_out = run_nsga2(
-                self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
-            )
-        elif moea_key in ("mopso", "mopso_cd", "mopso-cd"):
-            evo_out = run_mopso(
-                self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
-            )
-        elif moea_key in ("comocma", "mocma", "mo-cma-es"):
-            evo_out = run_comocma(
-                self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
-            )
-        else:
-            raise ValueError(f"Unknown moea backend: {moea}")
+        evo_out = self._run_moea(moea_key, train_dataloaders, test_dataloaders, evo_kwargs)
 
         if getattr(self, "_wandb_enabled", False):
             zc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1)

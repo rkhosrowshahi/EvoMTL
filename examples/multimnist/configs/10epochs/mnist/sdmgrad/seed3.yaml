@@ -1,0 +1,45 @@
+# 10-epoch protocol (PaMaL's budget): 10 epochs, Adam with learning rate 1.0e-3.
+# SDMGrad – Stochastic Direction-oriented Multitask Gradient
+# Chen et al., ICML 2023
+# Uses random direction-oriented gradient aggregation to approximate the Pareto front.
+
+# General
+mode: train
+seed: 3
+gpu_id: "0"
+
+# Architecture
+weighting: SDMGrad
+SDMGrad_lamda: 0.3     # mixing coefficient between the two sampled gradient directions
+SDMGrad_niter: 20      # inner iterations to solve the direction-finding QP
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .               # root of data/ folder (relative to examples/multimnist/)
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 10
+
+# Optimizer (Adam)
+optim: adam
+lr: 1.0e-3
+weight_decay: 5.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+amsgrad: false
+
+# Paths
+save_path: logs/mnist/10epochs/sdmgrad/adam/seed_3/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_enable: true
+wandb_project: multimnist
+wandb_name: sdmgrad-10epochs-seed3
+wandb_group: sdmgrad-10epochs

@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 import numpy as np
 import torch
@@ -42,12 +43,15 @@ def parse_args(parser):
     parser.add_argument('--config', default=None, type=str,
                         help='path to a YAML config file; CLI flags override YAML values')
     parser.add_argument('--dataset', default='mnist', type=str,
-                        help='mnist, fashion, fashion_and_mnist (MultiMNIST dataset pickle)')
+                        help='two tasks: mnist, fashion or fashion_and_mnist (28x28, Sener & Koltun, generated on '
+                             'first use), or the same with -36p (36x36 Pareto MTL pickles in data/)')
     parser.add_argument('--num_tasks', default=2, type=int, help='number of tasks')
     parser.add_argument('--train_bs', default=256, type=int, help='batch size for training')
     parser.add_argument('--test_bs', default=10000, type=int, help='batch size for test')
     parser.add_argument('--epochs', default=100, type=int, help='training epochs')
     parser.add_argument('--dataset_path', default='.', type=str, help='dataset root (parent of data/ folder)')
+    parser.add_argument('--shared_decoder', action='store_true', default=False,
+                        help='one decoder for all tasks: every task loss is computed on the same output')
     # Override LibMTL_args defaults to match this benchmark's typical settings.
     parser.set_defaults(
         optim='adam', lr=1e-3, weight_decay=5e-4,
@@ -65,21 +69,17 @@ def main(params):
     #                        'weight_decay': 0.0, 'momentum': 0.0}
     # scheduler_param = None
     
-    # Load MNIST dataset
+    # Input transform of Sener & Koltun's loader; the -36p pickles ignore it (raw 0-255, as in Pareto MTL)
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
     ])
-    
-    # Create MultiMNIST datasets (``dataset`` must match mnist.py pickle keys)
-    ds = params.dataset
-    if ds == 'mnist+fashion':
-        ds = 'fashion_and_mnist'
+
+    # Create MultiMNIST datasets (``dataset``: mnist, fashion, fashion_and_mnist, each optionally with -36p)
+    ds = params.dataset.replace('mnist+fashion', 'fashion_and_mnist')
     if params.num_tasks == 2:
-        train_multimnist = MultiMNISTDataset(
-            root=params.dataset_path, dataset=ds, train=True, transform=transform, download=False)
-        test_multimnist = MultiMNISTDataset(
-            root=params.dataset_path, dataset=ds, train=False, transform=transform, download=False)
+        train_multimnist = MultiMNISTDataset(root=params.dataset_path, dataset=ds, train=True, transform=transform)
+        test_multimnist = MultiMNISTDataset(root=params.dataset_path, dataset=ds, train=False, transform=transform)
         task_dict = {'top-left': {'metrics': ['Acc'],
                         'metrics_fn': AccMetric(),
                        'loss_fn': CELoss(),
@@ -110,6 +110,9 @@ def main(params):
     multimnist_train_loader = DataLoader(train_multimnist, batch_size=params.train_bs, shuffle=True)
     multimnist_test_loader = DataLoader(test_multimnist, batch_size=params.test_bs, shuffle=False)
     
+    img_size = 36 if params.num_tasks == 2 and ds.endswith('-36p') else 28  # 36x36 only for the -36p pickles
+    fc_in = 20 * (((img_size - 4) // 2 - 4) // 2) ** 2  # after conv5-pool2-conv5-pool2: 720 (36x36) or 320 (28x28)
+
     class MultiLeNetEncoder(nn.Module):
         """The encoder part of the LeNet network adapted to MultiTask Learning. The model consists of two convolutions
         followed by a fully connected layers, resulting in a 50-dimensional embedding."""
@@ -122,7 +125,7 @@ def main(params):
             self.maxpool1 = nn.MaxPool2d(kernel_size=2, stride=2)
             self.maxpool2 = nn.MaxPool2d(kernel_size=2, stride=2)
             self.flatten = nn.Flatten()
-            self.fc = nn.Linear(720, 50)
+            self.fc = nn.Linear(fc_in, 50)
 
         def forward(self, x):
             x = F.relu(self.conv1(x))
@@ -149,8 +152,12 @@ def main(params):
             x = self.fc_task(x)
             return x
     
-    # Define the decoders
-    decoders = nn.ModuleDict({task: MultiLeNetDecoder() for task in list(task_dict.keys())})
+    # Define the decoders (one module shared by all tasks with --shared_decoder: no task-specific parameters)
+    if params.shared_decoder:
+        shared = MultiLeNetDecoder()
+        decoders = nn.ModuleDict({task: shared for task in list(task_dict.keys())})
+    else:
+        decoders = nn.ModuleDict({task: MultiLeNetDecoder() for task in list(task_dict.keys())})
 
     evo_args = kwargs.get('evo_args') or {}
     _TrainerBase = EvoMTLTrainer if evo_args.get('evo_training') else Trainer
@@ -189,8 +196,37 @@ def main(params):
     else:
         raise ValueError
 
+class _Tee:
+    """Write to the terminal stream and a log file at once (line-buffered)."""
+
+    def __init__(self, stream, log):
+        self.stream, self.log = stream, log
+
+    def write(self, s):
+        self.stream.write(s)
+        self.log.write(s)
+        return len(s)
+
+    def flush(self):
+        self.stream.flush()
+        self.log.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def _log_to_save_path(params):
+    """Mirror stdout and stderr into <save_path>/stdout.log (read by the plot scripts)."""
+    if not params.save_path:
+        return
+    os.makedirs(params.save_path, exist_ok=True)
+    log = open(os.path.join(params.save_path, "stdout.log"), "w", buffering=1)
+    sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
+
+
 if __name__ == "__main__":
     params = parse_args(LibMTL_args)
+    _log_to_save_path(params)
     # set device
     set_device(params.gpu_id)
     # set random seed
