@@ -141,6 +141,8 @@ def plot_trajectory(d, gens, panels, cmap, norm, args):
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.45, 0.93))
     name = {"upgrad": "MO-OpenES-UPGrad", "mean": "MO-OpenES-WS", "ws": "OpenES"}[d["aggregator"]]
+    if "Guided" in d.get("method", ""):  # Guided ES runs save their own name (GuidedES, MO-GuidedES-UPGRAD, ...)
+        name = d["method"]
     fig.suptitle(rf"Search trajectory of {name} (N={d['pop_size']}, $\sigma$={d['sigma']:g}, Adam, LR={fmt_lr(d['lr'])})")
     fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=axes.tolist(), label="Generation", shrink=0.75)
     stem = args.out or os.path.join(os.path.dirname(args.path),

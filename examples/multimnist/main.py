@@ -220,7 +220,7 @@ def _log_to_save_path(params):
     if not params.save_path:
         return
     os.makedirs(params.save_path, exist_ok=True)
-    log = open(os.path.join(params.save_path, "stdout.log"), "w", buffering=1)
+    log = open(os.path.join(params.save_path, "stdout.log"), "w", buffering=1, encoding="utf-8")
     sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
 
 

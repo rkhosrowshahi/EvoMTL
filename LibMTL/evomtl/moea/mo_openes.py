@@ -17,10 +17,27 @@ i.e. a Jacobian ``J`` of shape ``[K, d]``:
 * ``mean``: plain average of the rows (ablation: Jacobian without the dual-cone step).
 * ``ws``: standard OpenES on the equal-weight sum of losses (scalarized baseline).
 
+Per-parameter step sizes (``sigma_adapt``): OpenES samples isotropically with one ``sigma``. With
+``snes`` or ``pgpe`` every coordinate has its own ``sigma_i`` (samples ``mean + sigma * s``,
+``s ~ N(0, I)``), the mean gradient divides by ``sigma_i`` per coordinate, and after each update
+
+    g_sigma = u @ (s**2 - 1) / N,   u = shaped fitness of the aggregated objective
+
+where ``u`` is the centered rank of the summed loss (``ws``) or the per-objective centered ranks
+combined with the aggregator's weights ``w / sum(w)`` (``upgrad``, ``mean``). ``g_sigma_i > 0`` means
+large ``|s_i|`` came with high loss, so ``sigma_i`` shrinks:
+
+* ``snes`` (Schaul et al., 2011): ``sigma *= exp(-lr_sigma / 2 * g_sigma)``.
+* ``pgpe`` (Sehnke et al., 2010): ``sigma -= lr_sigma * sigma * g_sigma`` (the PGPE gradient
+  ``(eps**2 - sigma**2) / sigma`` with ``eps = sigma * s``), each ``sigma_i`` changing by at most a
+  factor ``1 +- sigma_max_change`` per generation (evotorch's ``stdev_max_change``).
+
 References:
 - OpenES: https://arxiv.org/abs/1703.03864
 - evosax: evosax/algorithms/distribution_based/open_es.py
 - UPGrad: https://arxiv.org/abs/2406.16232
+- SNES: https://doi.org/10.1145/2001576.2001692
+- PGPE: https://doi.org/10.1016/j.neunet.2009.12.004
 """
 
 from __future__ import annotations
@@ -40,12 +57,24 @@ from .common import configure_moea_random_seed, should_run_full_test
 from .hv import pareto_front_indices
 
 AGGREGATORS = ("upgrad", "mean", "ws")
+SIGMA_ADAPT = ("none", "snes", "pgpe")
 
 
 def centered_ranks(fitness: np.ndarray) -> np.ndarray:
     """Centered ranks in ``[-0.5, 0.5]`` along the population axis (evosax ``centered_rank_fitness_shaping_fn``)."""
     ranks = rankdata(fitness, axis=0) - 1.0
     return ranks / (fitness.shape[0] - 1) - 0.5
+
+
+FITNESS_SHAPING = ("centered_ranks", "raw")
+
+
+def shape_fitness(fitness: np.ndarray, shaping: str) -> torch.Tensor:
+    """Shaped fitness along the population axis: ``centered_ranks`` or ``raw`` (losses minus the population mean,
+    the unshaped OpenAI-ES estimator; with antithetic pairs the mean cancels exactly)."""
+    if shaping == "raw":
+        return torch.as_tensor(fitness - fitness.mean(axis=0, keepdims=True), dtype=torch.float64)
+    return torch.as_tensor(centered_ranks(fitness), dtype=torch.float64)
 
 
 def aggregate_jacobian(
@@ -122,6 +151,30 @@ def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
     return float(a @ b / (a.norm() * b.norm()).clamp_min(1e-30))
 
 
+def _sigma_stats(sigma: Any) -> Tuple[float, float, float]:
+    """(mean, min, max) of a scalar or per-parameter sigma."""
+    if isinstance(sigma, torch.Tensor):
+        return float(sigma.mean()), float(sigma.min()), float(sigma.max())
+    return float(sigma), float(sigma), float(sigma)
+
+
+def adapt_sigma(
+    sigma: torch.Tensor,
+    u: torch.Tensor,
+    s: torch.Tensor,
+    rule: str,
+    lr: float,
+    max_change: float,
+) -> torch.Tensor:
+    """One SNES / PGPE step on the per-parameter ``sigma`` [d] from shaped fitness ``u`` [N] (higher = worse)
+    and standard-normal samples ``s`` [N, d] (see module docstring)."""
+    g_sigma = (u @ (s * s - 1.0)) / s.shape[0]
+    if rule == "snes":
+        return sigma * torch.exp(-0.5 * lr * g_sigma)
+    new = sigma - lr * sigma * g_sigma
+    return torch.minimum(torch.maximum(new, sigma * (1.0 - max_change)), sigma * (1.0 + max_change))
+
+
 def true_jacobian(trainer: Any, z: torch.Tensor, batches: list) -> torch.Tensor:
     """Backprop Jacobian ``[K, d]`` of the per-task losses w.r.t. ``z`` at ``theta_0 + alpha * z``.
 
@@ -156,6 +209,11 @@ def run_mo_openes(
     sigma: float = 0.01,
     sigma_decay: float = 1.0,
     sigma_min: float = 0.0,
+    sigma_schedule: str = "constant",
+    sigma_adapt: str = "none",
+    sigma_lr: float = 0.0,
+    sigma_max_change: float = 0.2,
+    fitness_shaping: str = "centered_ranks",
     aggregator: str = "upgrad",
     antithetic: bool = True,
     optim: str = "adam",
@@ -195,6 +253,20 @@ def run_mo_openes(
         (``rmsprop_*`` apply; ``alpha`` is the squared-gradient smoothing constant).
     sigma, sigma_decay, sigma_min
         Perturbation std; after each update ``sigma = max(sigma * sigma_decay, sigma_min)``.
+        With ``sigma_adapt`` it is the initial value of every ``sigma_i``.
+    sigma_schedule : str
+        ``"constant"`` (default; ``sigma_decay`` applies) or ``"cosine"``: generation ``t`` (0-based) samples
+        with ``sigma_min + (sigma - sigma_min) * (1 + cos(pi * t / num_iterations)) / 2``, i.e. ``sigma`` at
+        the first generation, annealed towards ``sigma_min`` at the end. Needs ``sigma_decay = 1`` and no
+        ``sigma_adapt``.
+    sigma_adapt, sigma_lr, sigma_max_change
+        Per-parameter step sizes: ``"none"`` (isotropic OpenES), ``"snes"`` or ``"pgpe"`` (see module
+        docstring). ``sigma_lr = 0`` picks the default: ``(3 + ln d) / (5 sqrt d)`` for SNES, ``0.1`` for
+        PGPE. ``sigma_max_change`` bounds PGPE's relative change per generation. Not combinable with
+        Guided ES sampling.
+    fitness_shaping : str
+        ``"centered_ranks"`` (default, as evosax / OpenAI-ES) or ``"raw"``: the losses minus the population
+        mean, i.e. the unshaped estimator ``F @ eps / (N sigma)`` of the Gaussian-smoothed gradient.
     aggregator : str
         ``"upgrad"`` (default), ``"mean"``, or ``"ws"`` (see module docstring).
     antithetic : bool
@@ -233,6 +305,20 @@ def run_mo_openes(
     pop_size = int(pop_size)
     if antithetic and pop_size % 2 != 0:
         raise ValueError(f"Antithetic sampling needs an even pop_size, got {pop_size}.")
+    sigma_adapt = str(sigma_adapt).strip().lower()
+    if sigma_adapt not in SIGMA_ADAPT:
+        raise ValueError(f"Unknown sigma_adapt {sigma_adapt!r}; options: {SIGMA_ADAPT}")
+    if sigma_adapt != "none" and guided_k > 0:
+        raise ValueError("sigma_adapt (snes / pgpe) is not combinable with Guided ES sampling (guided_k > 0).")
+    fitness_shaping = str(fitness_shaping).strip().lower()
+    if fitness_shaping not in FITNESS_SHAPING:
+        raise ValueError(f"Unknown fitness_shaping {fitness_shaping!r}; options: {FITNESS_SHAPING}")
+    sigma_schedule = str(sigma_schedule).strip().lower()
+    if sigma_schedule not in ("constant", "cosine"):
+        raise ValueError(f"Unknown sigma_schedule {sigma_schedule!r}; options: constant, cosine")
+    if sigma_schedule == "cosine" and (sigma_adapt != "none" or float(sigma_decay) != 1.0):
+        raise ValueError("sigma_schedule=cosine needs sigma_decay=1 and sigma_adapt=none.")
+    sigma_0 = float(sigma)
 
     configure_moea_random_seed(seed)
     gen = torch.Generator().manual_seed(int(seed))
@@ -254,14 +340,23 @@ def run_mo_openes(
     optim = str(optim).strip().lower()
     optimizer = make_es_optimizer([mean], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps)
     sigma = float(sigma)
+    if sigma_adapt != "none":  # one step size per parameter, all starting at sigma
+        sigma = torch.full((n_var,), sigma, dtype=torch.float64)
+        if sigma_lr <= 0:
+            sigma_lr = (3.0 + math.log(n_var)) / (5.0 * math.sqrt(n_var)) if sigma_adapt == "snes" else 0.1
     method = f"MO-OpenES-{aggregator.upper()}" if aggregator != "ws" else "OpenES"
     if guided_k > 0:  # Guided ES sampling: OpenES -> GuidedES, MO-OpenES-X -> MO-GuidedES-X
         method = method.replace("OpenES", "GuidedES")
+    if sigma_adapt != "none":  # OpenES -> SNES / PGPE, MO-OpenES-X -> MO-SNES-X / MO-PGPE-X
+        method = method.replace("OpenES", sigma_adapt.upper())
     guide: list = []  # unit vectors of the last guided_k ES directions
 
     print(
-        f"[EvoMTL] {method}: dims={n_var} | pop={pop_size} | optim={optim} lr={lr} | sigma={sigma} "
-        f"(decay={sigma_decay}, min={sigma_min}) | antithetic={antithetic}"
+        f"[EvoMTL] {method}: dims={n_var} | pop={pop_size} | optim={optim} lr={lr} | sigma={_sigma_stats(sigma)[0]} "
+        f"(schedule={sigma_schedule}, decay={sigma_decay}, min={sigma_min}) | antithetic={antithetic} "
+        f"| fitness={fitness_shaping}"
+        + (f" | sigma_adapt={sigma_adapt} lr_sigma={sigma_lr:.4g}"
+           + (f" max_change={sigma_max_change}" if sigma_adapt == "pgpe" else "") if sigma_adapt != "none" else "")
         + (f" | guided k={guided_k}, alpha={guided_alpha}, sigma_sub={guided_sigma or 'auto'}, ema={guided_ema}"
            if guided_k > 0 else ""),
         flush=True,
@@ -275,7 +370,7 @@ def run_mo_openes(
     # Test columns are filled only on generations with a test evaluation (evo_eval_freq).
     tasks = list(trainer.task_name)
     csv_cols = (
-        ["generation", "time_s", "sigma"]
+        ["generation", "time_s", "sigma", "sigma_min", "sigma_max"]
         + [f"pop_loss_mean_{t}" for t in tasks]
         + [f"train_loss_{t}" for t in tasks] + [f"train_acc_{t}" for t in tasks]
         + [f"test_loss_{t}" for t in tasks] + [f"test_acc_{t}" for t in tasks]
@@ -315,11 +410,11 @@ def run_mo_openes(
         # tell: per-objective rank-based pseudo-gradients -> Jacobian -> common direction
         scale = 1.0 / (pop_size * sigma)
         if aggregator == "ws":
-            shaped = torch.as_tensor(centered_ranks(F.sum(axis=1)), dtype=torch.float64)
+            shaped = shape_fitness(F.sum(axis=1), fitness_shaping)
             J = (shaped @ eps * scale).unsqueeze(0)
             direction, w = J[0], torch.ones(1, dtype=torch.float64)
         else:
-            shaped = torch.as_tensor(centered_ranks(F), dtype=torch.float64)  # [N, K]
+            shaped = shape_fitness(F, fitness_shaping)  # [N, K]
             J = shaped.T @ eps * scale  # [K, d]
             direction, w = aggregate_jacobian(J, aggregator, upgrad_norm_eps, upgrad_reg_eps)
 
@@ -329,7 +424,7 @@ def run_mo_openes(
         do_save = grad_save_freq > 0 and iteration % int(grad_save_freq) == 0
         if do_cos or do_save:
             J_true = true_jacobian(trainer, mean.detach(), shared_batches)
-            J_obj = torch.as_tensor(centered_ranks(F), dtype=torch.float64).T @ eps * scale
+            J_obj = shape_fitness(F, fitness_shaping).T @ eps * scale
             if aggregator == "ws":
                 d_true = J_true.sum(dim=0)
             else:
@@ -357,7 +452,17 @@ def run_mo_openes(
         optimizer.step()
         if guided_k > 0:
             guide = update_guide(guide, direction, guided_k, guided_ema)
-        sigma = max(sigma * float(sigma_decay), float(sigma_min))
+        if sigma_adapt != "none":
+            # shaped fitness of the aggregated objective: the summed loss, or the ranks weighted like the mean
+            u = shaped if aggregator == "ws" else shaped @ (w / w.abs().sum().clamp_min(1e-30))
+            sigma = adapt_sigma(sigma, u, eps, sigma_adapt, sigma_lr, sigma_max_change)
+            sigma = (sigma * float(sigma_decay)).clamp_min(float(sigma_min))
+        elif sigma_schedule == "cosine":  # sigma for the next generation (iteration + 1)
+            sigma = float(sigma_min) + 0.5 * (sigma_0 - float(sigma_min)) * (
+                1.0 + math.cos(math.pi * (iteration + 1) / num_iterations))
+        else:
+            sigma = max(sigma * float(sigma_decay), float(sigma_min))
+        sig_mean, sig_min, sig_max = _sigma_stats(sigma)
 
         population_X = population.numpy()
         population_F = F
@@ -369,12 +474,16 @@ def run_mo_openes(
         grad_cos = _mean_pairwise_cosine(J) if J.shape[0] > 1 else float("nan")
         conflict = (J @ direction).min().item() if J.shape[0] > 1 else float("nan")
         extras_wandb: Dict[str, Any] = {
-            "evo/openes/sigma": sigma,
+            "evo/openes/sigma": sig_mean,
             "evo/openes/direction_norm": float(direction.norm()),
             "evo/openes/mean_norm": float(mean.detach().norm()),
             "evo/openes/pop_losses/avg": float(F.mean()),
         }
-        progress = f"sigma={sigma:.4g} |d|={float(direction.norm()):.4g}"
+        if sigma_adapt != "none":
+            extras_wandb["evo/openes/sigma_min"], extras_wandb["evo/openes/sigma_max"] = sig_min, sig_max
+            progress = f"sigma={sig_mean:.4g} [{sig_min:.3g}, {sig_max:.3g}] |d|={float(direction.norm()):.4g}"
+        else:
+            progress = f"sigma={sig_mean:.4g} |d|={float(direction.norm()):.4g}"
         if J.shape[0] > 1:
             extras_wandb["evo/openes/grad_cos"] = grad_cos
             extras_wandb["evo/openes/min_gk_dot_d"] = conflict
@@ -434,7 +543,8 @@ def run_mo_openes(
             )
 
         if csv_writer is not None:
-            row: Dict[str, Any] = {"generation": iteration + 1, "time_s": round(elapsed, 4), "sigma": sigma}
+            row: Dict[str, Any] = {"generation": iteration + 1, "time_s": round(elapsed, 4),
+                                   "sigma": sig_mean, "sigma_min": sig_min, "sigma_max": sig_max}
             for k, t in enumerate(tasks):
                 row[f"pop_loss_mean_{t}"] = float(F[:, k].mean())
                 row[f"train_loss_{t}"] = float(train_batch_metrics["loss_item"][k])
@@ -455,6 +565,17 @@ def run_mo_openes(
 
     if csv_file is not None:
         csv_file.close()
+    if isinstance(sigma, torch.Tensor):
+        # final step size per parameter tensor (same order as the flat parameter vector of the full adapter)
+        if type(trainer.adapter).__name__ == "FullParameters":
+            start = 0
+            for name, p in trainer.model.named_parameters():
+                s = sigma[start:start + p.numel()]
+                print(f"[EvoMTL] sigma {name:45s} mean={float(s.mean()):.4g} "
+                      f"min={float(s.min()):.4g} max={float(s.max()):.4g}", flush=True)
+                start += p.numel()
+        if getattr(trainer, "save_path", None):
+            torch.save(sigma.float(), os.path.join(trainer.save_path, "sigma_final.pt"))
 
     mean_X = mean.detach().numpy().copy()
     nd_idx = pareto_front_indices(population_F) if len(population_F) else np.arange(0)
@@ -470,7 +591,7 @@ def run_mo_openes(
         "hv_ref_point": None if hv_ref_point is None else np.asarray(hv_ref_point, dtype=np.float64),
         "hv_center_aggregation": None,
         "hv_softmax_temperature": None,
-        "sigma": sigma,
+        "sigma": sigma.numpy() if isinstance(sigma, torch.Tensor) else sigma,
         "aggregator": aggregator,
     }
     trainer.last_evo = out

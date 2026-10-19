@@ -1,0 +1,63 @@
+# SNES: OpenES sampling with one sigma per parameter (evo_es_sigma = initial value), adapted every generation;
+# copy of mo_openes-upgrad-full with the sigma-adaptation keys added.
+# 10-epoch protocol (PaMaL's budget): 2344 generations x 256 images = 10 epochs.
+# MO-UPGrad-OpenES: one OpenES pseudo-gradient per objective (each loss ranked separately), combined
+# with UPGrad (mean of the projections onto the dual cone); Adam on the search mean. Same settings as
+# OpenES (openes-ws-full/pop_1024/adam-lr_0.001/seed1.yaml) apart from the aggregator.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Model (shared LeNet encoder, one head per task)
+weighting: EW                  # gradient-descent loss weighting; unused here (epochs: 0)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0                      # no gradient-descent phase: training is ES only
+
+# Evolution strategy; evo_moea selects the ES code, evo_es_aggregator upgrad combines the per-objective pseudo-gradients
+evo_training: true
+evo_schedule: moea_then_gd     # ES first, then `epochs` of gradient descent (none here)
+evo_moea: mo_openes
+evo_adapter: full
+evo_adapter_alpha: 1.0
+evo_iterations: 100        # tuning run
+evo_pop_size: 1024
+evo_num_batches: 1
+evo_eval_freq: 25
+evo_seed: 1
+evo_es_aggregator: upgrad
+upgrad_norm_eps: 0.0001
+upgrad_reg_eps: 0.0001
+evo_es_lr: 0.001
+evo_es_optim: adam            # optimizer on the search mean (sgd, adam or rmsprop); evo_es_lr is its learning rate
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.01
+evo_es_sigma_decay: 1.0
+evo_es_sigma_min: 0.0
+evo_es_sigma_adapt: snes        # per-parameter sigma (SNES)
+evo_es_sigma_lr: 0.2           # learning rate of the sigma update
+evo_es_antithetic: true
+evo_es_grad_cos_freq: 1       # log cosine(pseudo-gradient, backprop gradient); 0 = off
+
+# Paths
+save_path: logs/mnist/tune_sigma_adapt/mo_snes-upgrad-full/pop_1024/slr_0.2/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_enable: false
+wandb_project: multimnist
+wandb_name: mo_snes-upgrad-full-10epochs-pop_1024-adam-lr_0.001-seed1
+wandb_group: mo_snes-upgrad-full-10epochs-pop_1024-adam-lr_0.001

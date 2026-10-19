@@ -268,6 +268,20 @@ _parser.add_argument('--evo_es_sigma_decay', type=float, default=1.0,
                     help='MO-OpenES: multiply sigma by this after every iteration (1.0 = constant)')
 _parser.add_argument('--evo_es_sigma_min', type=float, default=0.0,
                     help='MO-OpenES: lower bound on sigma when decaying')
+_parser.add_argument('--evo_es_fitness_shaping', type=str, default='centered_ranks', choices=('centered_ranks', 'raw'),
+                    help='MO-OpenES: fitness shaping before the gradient estimate: centered_ranks (default) or raw '
+                         '(losses minus the population mean, the unshaped OpenAI-ES estimator)')
+_parser.add_argument('--evo_es_sigma_schedule', type=str, default='constant', choices=('constant', 'cosine'),
+                    help='MO-OpenES: sigma schedule: constant (with --evo_es_sigma_decay) or cosine annealing from '
+                         '--evo_es_sigma to --evo_es_sigma_min over --evo_iterations')
+_parser.add_argument('--evo_es_sigma_adapt', type=str, default='none', choices=('none', 'snes', 'pgpe'),
+                    help='MO-OpenES: per-parameter sigma adaptation: none (isotropic OpenES), snes (Schaul et al. '
+                         '2011, multiplicative) or pgpe (Sehnke et al. 2010, additive with clipped relative change)')
+_parser.add_argument('--evo_es_sigma_lr', type=float, default=0.0,
+                    help='MO-OpenES: learning rate of the sigma update; 0 = default '
+                         '(snes: (3 + ln d) / (5 sqrt d), pgpe: 0.1)')
+_parser.add_argument('--evo_es_sigma_max_change', type=float, default=0.2,
+                    help='MO-OpenES (pgpe): bound on the relative change of each sigma_i per generation')
 _parser.add_argument(
     '--evo_es_aggregator',
     type=str,
@@ -695,6 +709,11 @@ def _make_evo_args(params):
             'sigma': float(params.evo_es_sigma),
             'sigma_decay': float(params.evo_es_sigma_decay),
             'sigma_min': float(params.evo_es_sigma_min),
+            'sigma_schedule': str(params.evo_es_sigma_schedule).strip().lower(),
+            'fitness_shaping': str(params.evo_es_fitness_shaping).strip().lower(),
+            'sigma_adapt': str(params.evo_es_sigma_adapt).strip().lower(),
+            'sigma_lr': float(params.evo_es_sigma_lr),
+            'sigma_max_change': float(params.evo_es_sigma_max_change),
             'aggregator': str(params.evo_es_aggregator).strip().lower(),
             'antithetic': bool(params.evo_es_antithetic),
             'grad_cos_freq': int(params.evo_es_grad_cos_freq),
