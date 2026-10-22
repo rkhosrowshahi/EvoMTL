@@ -709,7 +709,7 @@ class EvoMTLTrainer(Trainer):
             torch.save(
                 {
                     "theta_0": self.theta_0,
-                    "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"]),
+                    "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"], dtype=torch.float32),
                     "pareto_F": evo_out["pareto_F"],
                     "pareto_X": evo_out["pareto_X"],
                     "hv_weights": evo_out["hv_weights"],
@@ -864,7 +864,7 @@ class EvoMTLTrainer(Trainer):
             torch.save(
                 {
                     "theta_0": self.theta_0,
-                    "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"]),
+                    "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"], dtype=torch.float32),
                     "pareto_F": evo_out["pareto_F"],
                     "pareto_X": evo_out["pareto_X"],
                     "hv_weights": evo_out["hv_weights"],

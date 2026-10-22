@@ -10,13 +10,13 @@ import torch.nn as nn
 
 
 def _z_to_torch_cpu(z: Any) -> torch.Tensor:
-    """Flatten ``z`` to 1D float64 on CPU.
+    """Flatten ``z`` to 1D float32 on CPU.
 
     Accepts ``torch.Tensor``, Python sequences, or NumPy arrays (via ``torch.as_tensor``, no NumPy import).
     """
     if isinstance(z, torch.Tensor):
-        return z.detach().cpu().reshape(-1).to(torch.float64)
-    return torch.as_tensor(z, dtype=torch.float64, device=torch.device("cpu")).reshape(-1)
+        return z.detach().cpu().reshape(-1).to(torch.float32)
+    return torch.as_tensor(z, dtype=torch.float32, device=torch.device("cpu")).reshape(-1)
 
 
 def adapt_parameters(
@@ -64,14 +64,14 @@ class RandomProjection:
         torch.manual_seed(int(seed))
 
         self.projections = (
-            torch.randn(self.N, self.k, generator=self._rng, dtype=torch.float64)
+            torch.randn(self.N, self.k, generator=self._rng, dtype=torch.float32)
             / math.sqrt(self.k)
         )
         self.num_dims = self.k + 1
         self.z0 = self._init_z0()
 
     def _init_z0(self):
-        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
         z0[-1] = 1.0
         return z0
 
@@ -119,7 +119,7 @@ class FullParameters:
         print(f"FullParameters: z dim = {self.num_dims} | model params = {self.N}")
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        return torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
 
     def expand(self, z):
         return _z_to_torch_cpu(z)
@@ -191,7 +191,7 @@ class LayerwiseRandomProjection:
                 n_bias_dims += dims
             else:
                 P = (
-                    torch.randn(size, self.k, generator=self._rng, dtype=torch.float64)
+                    torch.randn(size, self.k, generator=self._rng, dtype=torch.float32)
                     / math.sqrt(self.k)
                 )
                 proj_idx = len(self.projections)
@@ -221,7 +221,7 @@ class LayerwiseRandomProjection:
         )
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        return torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
 
     def expand(self, z):
         """Expand layer-wise latent vector to full parameter-space delta."""
@@ -360,7 +360,7 @@ class LayerwiseRandomBlocking:
         )
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        return torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
 
     def expand(self, z):
         """Expand latent vector to full parameter-space delta via random index ties."""
@@ -456,7 +456,7 @@ class LayerwiseScaledRandomProjection:
                 n_bias_dims += dims
             else:
                 P = (
-                    torch.randn(size, self.k, generator=self._rng, dtype=torch.float64)
+                    torch.randn(size, self.k, generator=self._rng, dtype=torch.float32)
                     / math.sqrt(self.k)
                 )
                 proj_idx = len(self.projections)
@@ -486,7 +486,7 @@ class LayerwiseScaledRandomProjection:
         )
 
     def _init_z0(self):
-        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
         for info in self.layer_info:
             if info["type"] == "proj_scaled":
                 z0[info["offset"] + self.k] = 1.0
@@ -617,7 +617,7 @@ class FlattenLoRA:
         )
 
     def _init_z0(self):
-        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
         for layer_info in self.layer_info:
             if layer_info['type'] in ('2d', '4d'):
                 z0[layer_info['offset'] + layer_info['dims'] - 1] = 1.0
@@ -780,7 +780,7 @@ class DictLoRA:
         )
 
     def _init_z0(self):
-        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
         for layer_info in self.layer_info:
             if layer_info['type'] in ('2d', '4d_dict'):
                 z0[layer_info['offset'] + layer_info['dims'] - 1] = 1.0
@@ -940,7 +940,7 @@ class LinearOnlyLoRA:
         )
 
     def _init_z0(self):
-        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
         for info in self.layer_info:
             if info['type'] == 'lora_2d':
                 z0[info['offset'] + info['dims'] - 1] = 1.0
@@ -963,7 +963,7 @@ class LinearOnlyLoRA:
                 offset = info['offset']
                 parts.append(z[offset:offset + info['n']].clone())
             else:
-                parts.append(torch.zeros(info['size'], dtype=torch.float64, device=torch.device("cpu")))
+                parts.append(torch.zeros(info['size'], dtype=torch.float32, device=torch.device("cpu")))
 
         return torch.cat(parts)
 
@@ -1078,7 +1078,7 @@ class ModulationLoRA:
         )
 
     def _init_z0(self):
-        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
         for info in self.layer_info:
             if info['type'] == 'lora_2d':
                 z0[info['offset'] + info['dims'] - 1] = 1.0
@@ -1112,7 +1112,7 @@ class ModulationLoRA:
                 offset = info['offset']
                 parts.append(z[offset:offset + info['n']].clone())
             else:
-                parts.append(torch.zeros(info['size'], dtype=torch.float64, device=torch.device("cpu")))
+                parts.append(torch.zeros(info['size'], dtype=torch.float32, device=torch.device("cpu")))
 
         return torch.cat(parts)
 
@@ -1242,7 +1242,7 @@ class SpectralLoRA:
         )
 
     def _init_z0(self):
-        z0 = torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        z0 = torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
         for info in self.layer_info:
             if info['type'] == 'lora_2d':
                 z0[info['offset'] + info['dims'] - 1] = 1.0
@@ -1277,7 +1277,7 @@ class SpectralLoRA:
                 offset = info['offset']
                 parts.append(z[offset:offset + info['n']].clone())
             else:
-                parts.append(torch.zeros(info['size'], dtype=torch.float64, device=torch.device("cpu")))
+                parts.append(torch.zeros(info['size'], dtype=torch.float32, device=torch.device("cpu")))
 
         return torch.cat(parts)
 
@@ -1406,7 +1406,7 @@ class SpectralAllSVD:
         )
 
     def _init_z0(self):
-        return torch.zeros(self.num_dims, dtype=torch.float64, device=torch.device("cpu"))
+        return torch.zeros(self.num_dims, dtype=torch.float32, device=torch.device("cpu"))
 
     def expand(self, z):
         """Deltas via ``U_k @ diag(z) @ Vt_k`` for conv and linear weights."""
@@ -1426,7 +1426,7 @@ class SpectralAllSVD:
                 offset = info['offset']
                 parts.append(z[offset:offset + info['n']].clone())
             else:
-                parts.append(torch.zeros(info['size'], dtype=torch.float64, device=torch.device("cpu")))
+                parts.append(torch.zeros(info['size'], dtype=torch.float32, device=torch.device("cpu")))
 
         return torch.cat(parts)
 

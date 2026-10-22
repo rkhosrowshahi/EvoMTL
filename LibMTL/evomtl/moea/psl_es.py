@@ -111,7 +111,7 @@ def conditioned_indices(model: torch.nn.Module, spec: str) -> torch.Tensor:
 def simplex_basis(K: int) -> torch.Tensor:
     """Orthonormal basis ``[K, K - 1]`` of ``{v : sum(v) = 0}``; column ``i`` follows ``e_i - 1/K``
     (for two tasks the single column is ``(1, -1) / sqrt(2)``)."""
-    A = torch.eye(K, dtype=torch.float64)[:, : K - 1] - 1.0 / K
+    A = torch.eye(K, dtype=torch.float32)[:, : K - 1] - 1.0 / K
     Q, R = torch.linalg.qr(A)
     return Q * torch.sign(torch.diagonal(R))
 
@@ -125,10 +125,10 @@ def sample_preferences(M: int, K: int, gen: torch.Generator) -> torch.Tensor:
     """``M`` preferences ``[M, K]``, uniform on the simplex: stratified for two tasks (one ``lam_1``
     in each bin of width ``1/M``, in random order), Dirichlet(1) from sorted uniforms otherwise."""
     if K == 2:
-        lam1 = (torch.randperm(M, generator=gen).double() + torch.rand(M, generator=gen, dtype=torch.float64)) / M
+        lam1 = (torch.randperm(M, generator=gen).float() + torch.rand(M, generator=gen, dtype=torch.float32)) / M
         return torch.stack([lam1, 1.0 - lam1], dim=1)
-    u = torch.sort(torch.rand(M, K - 1, generator=gen, dtype=torch.float64), dim=1).values
-    zeros, ones = torch.zeros(M, 1, dtype=torch.float64), torch.ones(M, 1, dtype=torch.float64)
+    u = torch.sort(torch.rand(M, K - 1, generator=gen, dtype=torch.float32), dim=1).values
+    zeros, ones = torch.zeros(M, 1, dtype=torch.float32), torch.ones(M, 1, dtype=torch.float32)
     return torch.cat([zeros, u, ones], dim=1).diff(dim=1)
 
 
@@ -137,7 +137,7 @@ def center_weights(lam: torch.Tensor, a: float) -> torch.Tensor:
     mean 1: weighting by them follows preferences from ``Dirichlet(a, ..., a)`` (``lam_1 ~ Beta(a, a)`` for two
     tasks), concentrated around the balanced preference for ``a > 1``. ``a = 1`` gives equal weights."""
     if a == 1.0:
-        return torch.ones(lam.shape[0], dtype=torch.float64)
+        return torch.ones(lam.shape[0], dtype=torch.float32)
     logw = (a - 1.0) * torch.log(lam.clamp_min(1e-12)).sum(dim=1)
     w = torch.exp(logw - logw.max())
     return w / w.mean()
@@ -157,7 +157,7 @@ def preference_grid(K: int, n: int) -> torch.Tensor:
     """Simplex lattice with ``n`` points per edge (Das-Dennis); for two tasks ``lam_1 = 0, 1/(n-1), ..., 1``."""
     H = max(int(n) - 1, 1)
     pts = [c for c in itertools.product(range(H + 1), repeat=K) if sum(c) == H]
-    return torch.tensor(pts, dtype=torch.float64) / H
+    return torch.tensor(pts, dtype=torch.float32) / H
 
 
 def hv_directions(lam: np.ndarray) -> np.ndarray:
@@ -291,8 +291,8 @@ def run_psl_es(
     P, C = int(idx.numel()), K - 1
     Q = simplex_basis(K)
     n_var = D + P * C
-    x = torch.zeros(n_var, dtype=torch.float64)
-    x[:D] = torch.as_tensor(trainer.adapter.z0, dtype=torch.float64).reshape(-1)  # B starts at 0
+    x = torch.zeros(n_var, dtype=torch.float32)
+    x[:D] = torch.as_tensor(trainer.adapter.z0, dtype=torch.float32).reshape(-1)  # B starts at 0
     x.requires_grad_(True)
     optim = str(optim).strip().lower()
     optimizer = make_es_optimizer([x], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps)
@@ -304,7 +304,7 @@ def run_psl_es(
     task_dirs: Dict[Tuple[int, int], torch.Tensor] = {}  # psl_guide="tasks": (region, task) -> weight-space direction
     grid = preference_grid(K, eval_points)
     grid_phi = preference_features(grid, Q)
-    balanced_phi = torch.zeros(C, dtype=torch.float64)  # phi(1/K) = 0
+    balanced_phi = torch.zeros(C, dtype=torch.float32)  # phi(1/K) = 0
     ref = None if hv_ref_point is None else np.asarray(hv_ref_point, dtype=np.float64).reshape(K)
 
     def delta(xv: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
@@ -368,7 +368,7 @@ def run_psl_es(
         test_metrics = None
 
         # ask: eps over x, one preference per antithetic pair
-        eps = torch.randn(M, n_var, generator=gen, dtype=torch.float64)
+        eps = torch.randn(M, n_var, generator=gen, dtype=torch.float32)
         if guided_k > 0 and guide:
             eps = guided_noise(eps, guide, gen, sigma, guided_alpha, guided_sigma)
         lam = sample_preferences(M, K, gen)
@@ -390,11 +390,11 @@ def run_psl_es(
         def pair_ranks(scores: np.ndarray) -> torch.Tensor:
             diff = scores[:M] - scores[M:]
             if rank_groups <= 1:
-                return torch.as_tensor(centered_ranks(np.concatenate([diff, -diff]))[:M], dtype=torch.float64)
+                return torch.as_tensor(centered_ranks(np.concatenate([diff, -diff]))[:M], dtype=torch.float32)
             r = np.zeros(M)
             for grp in np.array_split(np.argsort(lam_np[:M, 0]), rank_groups):
                 r[grp] = centered_ranks(np.concatenate([diff[grp], -diff[grp]]))[: len(grp)]
-            return torch.as_tensor(r, dtype=torch.float64)
+            return torch.as_tensor(r, dtype=torch.float32)
 
         ranks = pair_ranks(scalarize(F, lam_np, scalarization, ref))
         if split:  # z: centre-weighted ranks; B: ranks of the scores chosen by spread_score
@@ -420,18 +420,18 @@ def run_psl_es(
                     continue
                 for k in range(K):
                     d = F[members, k] - F[members + M, k]
-                    rk = torch.as_tensor(centered_ranks(np.concatenate([d, -d]))[: len(members)], dtype=torch.float64)
+                    rk = torch.as_tensor(centered_ranks(np.concatenate([d, -d]))[: len(members)], dtype=torch.float32)
                     v = rk @ dtheta[members]
                     v = v / v.norm().clamp_min(1e-30)
                     old = task_dirs.get((r, k))
                     task_dirs[(r, k)] = v if old is None else guided_ema * old + (1.0 - guided_ema) * v
             guide = []  # each direction in the z block and in every column of B
             for g in task_dirs.values():
-                guide.append(torch.cat([g, torch.zeros(P * C, dtype=torch.float64)]))
+                guide.append(torch.cat([g, torch.zeros(P * C, dtype=torch.float32)]))
                 for c in range(C):
-                    b = torch.zeros(P, C, dtype=torch.float64)
+                    b = torch.zeros(P, C, dtype=torch.float32)
                     b[:, c] = g[idx]
-                    guide.append(torch.cat([torch.zeros(D, dtype=torch.float64), b.flatten()]))
+                    guide.append(torch.cat([torch.zeros(D, dtype=torch.float32), b.flatten()]))
         elif guided_k > 0:
             guide = update_guide(guide, direction, guided_k, guided_ema)
         sigma = max(sigma * float(sigma_decay), float(sigma_min))

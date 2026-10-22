@@ -73,8 +73,8 @@ def shape_fitness(fitness: np.ndarray, shaping: str) -> torch.Tensor:
     """Shaped fitness along the population axis: ``centered_ranks`` or ``raw`` (losses minus the population mean,
     the unshaped OpenAI-ES estimator; with antithetic pairs the mean cancels exactly)."""
     if shaping == "raw":
-        return torch.as_tensor(fitness - fitness.mean(axis=0, keepdims=True), dtype=torch.float64)
-    return torch.as_tensor(centered_ranks(fitness), dtype=torch.float64)
+        return torch.as_tensor(fitness - fitness.mean(axis=0, keepdims=True), dtype=torch.float32)
+    return torch.as_tensor(centered_ranks(fitness), dtype=torch.float32)
 
 
 def aggregate_jacobian(
@@ -125,7 +125,7 @@ def guided_noise(
 ) -> torch.Tensor:
     """Guided ES sampling: keep ``sqrt(alpha)`` of the isotropic ``eps`` and add noise along ``guide``."""
     U = torch.linalg.qr(torch.stack(guide, dim=1))[0]  # [D, k'] orthonormal guiding basis
-    e_sub = torch.randn(eps.shape[0], U.shape[1], generator=gen, dtype=torch.float64)
+    e_sub = torch.randn(eps.shape[0], U.shape[1], generator=gen, dtype=torch.float32)
     sub_scale = (guided_sigma / sigma) if guided_sigma > 0 else math.sqrt((1.0 - guided_alpha) * eps.shape[1] / U.shape[1])
     return math.sqrt(guided_alpha) * eps + sub_scale * (e_sub @ U.T)
 
@@ -187,14 +187,14 @@ def true_jacobian(trainer: Any, z: torch.Tensor, batches: list) -> torch.Tensor:
     model.eval()
     params = list(model.parameters())
     K = int(trainer.task_num)
-    J_theta = torch.zeros(K, sum(p.numel() for p in params), dtype=torch.float64, device=trainer.device)
+    J_theta = torch.zeros(K, sum(p.numel() for p in params), dtype=torch.float32, device=trainer.device)
     with torch.enable_grad():
         for inp, gts in batches:
             losses = trainer.forward4loss(model, inp, gts)
             for k in range(K):
                 grads = torch.autograd.grad(losses[k], params, retain_graph=k < K - 1, allow_unused=True)
                 J_theta[k] += torch.cat([
-                    (g if g is not None else torch.zeros_like(p)).reshape(-1).double()
+                    (g if g is not None else torch.zeros_like(p)).reshape(-1).float()
                     for g, p in zip(grads, params)
                 ])
     return (J_theta * (trainer.adapter_alpha / len(batches))).cpu()
@@ -335,13 +335,13 @@ def run_mo_openes(
         grad_save_freq = 0
     grad_snapshots: Dict[str, list] = {"generation": [], "mean": [], "true": [], "pseudo": [],
                                        "direction": [], "true_direction": []}
-    mean = torch.as_tensor(trainer.adapter.z0, dtype=torch.float64).reshape(-1).clone()
+    mean = torch.as_tensor(trainer.adapter.z0, dtype=torch.float32).reshape(-1).clone()
     mean.requires_grad_(True)
     optim = str(optim).strip().lower()
     optimizer = make_es_optimizer([mean], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps)
     sigma = float(sigma)
     if sigma_adapt != "none":  # one step size per parameter, all starting at sigma
-        sigma = torch.full((n_var,), sigma, dtype=torch.float64)
+        sigma = torch.full((n_var,), sigma, dtype=torch.float32)
         if sigma_lr <= 0:
             sigma_lr = (3.0 + math.log(n_var)) / (5.0 * math.sqrt(n_var)) if sigma_adapt == "snes" else 0.1
     method = f"MO-OpenES-{aggregator.upper()}" if aggregator != "ws" else "OpenES"
@@ -391,7 +391,7 @@ def run_mo_openes(
 
         # ask
         n_draw = pop_size // 2 if antithetic else pop_size
-        eps = torch.randn(n_draw, n_var, generator=gen, dtype=torch.float64)
+        eps = torch.randn(n_draw, n_var, generator=gen, dtype=torch.float32)
         if guided_k > 0 and guide:
             eps = guided_noise(eps, guide, gen, sigma, guided_alpha, guided_sigma)
         if antithetic:
@@ -412,7 +412,7 @@ def run_mo_openes(
         if aggregator == "ws":
             shaped = shape_fitness(F.sum(axis=1), fitness_shaping)
             J = (shaped @ eps * scale).unsqueeze(0)
-            direction, w = J[0], torch.ones(1, dtype=torch.float64)
+            direction, w = J[0], torch.ones(1, dtype=torch.float32)
         else:
             shaped = shape_fitness(F, fitness_shaping)  # [N, K]
             J = shaped.T @ eps * scale  # [K, d]
