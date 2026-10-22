@@ -58,8 +58,8 @@ Typical cost on a laptop CPU (MultiMNIST, population 128, full adapter): about 0
 
 | `evo_schedule` | What happens |
 | --- | --- |
-| `gd_then_moea` (default) | `epochs` of gradient descent, then the evolutionary search starting from those weights. |
-| `moea_then_gd` | Evolutionary search from the initial weights, then `epochs` of gradient descent. With `epochs: 0` the run is pure evolution; all ES experiments use this. |
+| `evolution` | Multi-objective evolutionary training from the initial weights, no gradient descent (needs `epochs: 0`): a Pareto front (NSGA-II, MOPSO-CD, COMO-CMA, PSL-ES) or one Pareto-stationary network (MO-OpenES with UPGrad). All ES experiments use this. |
+| `gd_then_evolution` (default) | `epochs` of multi-objective gradient descent, then the same evolutionary training as fine-tuning that shapes the Pareto front. |
 
 ## Methods
 
@@ -80,8 +80,8 @@ Typical cost on a laptop CPU (MultiMNIST, population 128, full adapter): about 0
 
 How the ES variants differ:
 
-- **OpenES**: one fitness per member, the sum of the task losses. Members are ranked, the centered ranks weight the noise vectors, and the result is the search gradient.
-- **MO-…-OpenES (Jacobian descent)**: each task loss is ranked separately, giving one search gradient per task (a Jacobian). `upgrad` projects each row onto the dual cone of all rows and averages the projections, so the step does not increase any task loss to first order; `mean` averages the rows without projection (ablation).
+- **OpenES**: one fitness per member, the sum of the task losses. The fitnesses minus their population mean (or their centered ranks, `evo_es_fitness_shaping: centered_ranks`) weight the noise vectors, and the result is the search gradient.
+- **MO-…-OpenES (Jacobian descent)**: each task loss is shaped separately, giving one search gradient per task (a Jacobian). `upgrad` projects each row onto the dual cone of all rows and averages the projections, so the step does not increase any task loss to first order; `mean` averages the rows without projection (ablation).
 - **…-GuidedES**: part of the sampling noise is drawn along a guiding direction, a moving average of past ES steps, instead of isotropically (Guided ES, Maheswaranathan et al. 2019).
 - **MO-PSL-…**: Pareto set learning. One run learns a line of networks `theta(lam) = theta_0 + z + (lam_1 - lam_2) B`, one per preference `lam`. Each antithetic pair draws its own preference and is scored with the Chebyshev scalarization `max_k lam_k l_k` (`tch`), the weighted sum (`ws`) or the hypervolume score (`hv`: how far the losses sit inside the box of the hypervolume reference point, measured along the preference direction; averaged over uniformly spread directions this is the hypervolume itself). The returned solution is the balanced network (`lam = 0.5, 0.5`); the whole front is evaluated on a grid of preferences. Optionally the update is split (`evo_psl_center_a`, `evo_psl_spread_score`): `z` follows the near-balanced preferences and `B` follows its own scores (Chebyshev from an ideal point near the front, or the hypervolume score), using the same evaluations.
 
@@ -112,6 +112,7 @@ All options are `--evo_*` flags (or keys in the YAML). The full list with help t
 | `evo_es_sigma` | 0.01 | Noise standard deviation. |
 | `evo_es_sigma_decay`, `evo_es_sigma_min` | 1.0, 0.0 | Multiply sigma by the decay after each generation, down to the minimum. |
 | `evo_es_antithetic` | on | Mirrored sampling (`eps`, `-eps`). Required for PSL. |
+| `evo_es_fitness_shaping` | `raw` | Fitness shaping before the gradient estimate: `raw` (losses minus the population mean; for PSL the unranked pair differences, the unbiased estimator) or `centered_ranks` (OpenAI-ES: bounded and robust to outliers, but of near-constant size). |
 | `evo_es_aggregator` | `upgrad` | `mo_openes` only: `ws`, `mean` or `upgrad` (see [Methods](#methods)). |
 | `upgrad_norm_eps`, `upgrad_reg_eps` | 1e-4 | UPGrad numerical settings. |
 | `evo_es_grad_cos_freq` | 1 | Diagnostic: cosine between the ES direction and the backprop gradient every N generations; 0 disables. |
@@ -139,7 +140,7 @@ Pareto set learning (`psl_es`):
 | `evo_psl_spread_score` | `same` | Scores ranked for the update of the steering matrix `B`: `same` (the ranks of `z`), `ideal` (Chebyshev from each task's lowest loss in the population on the batch, minus the margin, so off-centre preferences keep a trade-off with their weaker task) or `hv` (hypervolume score). |
 | `evo_psl_ideal_margin` | 0.1 | Margin below the population's lowest losses for `evo_psl_spread_score: ideal`. |
 | `evo_psl_guide` | `update` | Guiding subspace of Guided ES sampling for PSL: `update` (a moving average of past updates) or `tasks` (per-task directions estimated in three regions of the preference simplex, smoothed with `evo_es_guided_ema`, each placed in `z` and in `B`: 12 directions for two tasks). |
-| `evo_psl_rank_groups` | 1 | Rank the pair differences within this many groups of neighbouring preferences instead of across all pairs; use 8 with the `hv` score, whose scale grows near the ends. |
+| `evo_psl_rank_groups` | 1 | Rank the pair differences within this many groups of neighbouring preferences instead of across all pairs; use 8 with the `hv` score, whose scale grows near the ends. Needs `evo_es_fitness_shaping: centered_ranks`. |
 
 ### Multi-objective EAs
 

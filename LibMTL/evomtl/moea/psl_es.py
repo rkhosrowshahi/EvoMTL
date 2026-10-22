@@ -23,7 +23,9 @@ ES searches ``x = (z, B)``. One generation, with antithetic pairs ``j = 1..N/2``
    score (ranking raw scores would mostly rank the preferences); the centered ranks of
    ``{d_j} U {-d_j}`` take the place of OpenES's fitness ranks;
 4. ``g = 2 sum_j r_j eps_j / (N sigma)`` estimates the gradient of ``E_lam[s(theta(lam), lam)]``
-   under Gaussian smoothing, and the optimizer steps on ``x``.
+   under Gaussian smoothing, and the optimizer steps on ``x``. With ``fitness_shaping="raw"`` the
+   ranks are replaced by ``r_j = d_j / 2``, i.e. the unshaped antithetic estimator
+   ``g = sum_j d_j eps_j / (N sigma)``.
 
 Split update (optional; the defaults give the plain estimator above). ``z`` moves every network and
 is the balanced network, ``B`` sets the spread, and the two can follow different weightings of the
@@ -200,6 +202,7 @@ def run_psl_es(
     spread_score: str = "same",
     ideal_margin: float = 0.1,
     rank_groups: int = 1,
+    fitness_shaping: str = "raw",
     psl_guide: str = "update",
     antithetic: bool = True,
     optim: str = "adam",
@@ -242,6 +245,9 @@ def run_psl_es(
     rank_groups : int
         Rank the pair differences within this many groups of pairs with neighbouring ``lam_1`` (two tasks)
         instead of across all pairs (1, default).
+    fitness_shaping : str
+        ``"raw"`` (default): use the pair differences unranked (``r_j = d_j / 2``, see step 4), the unbiased
+        estimator; ``"centered_ranks"``: rank them. ``raw`` cannot be combined with ``rank_groups > 1``.
     psl_guide : str
         Guiding subspace of Guided ES sampling (``guided_k > 0``): ``"update"`` (default, a moving average of
         past update directions) or ``"tasks"`` (per-task, per-region directions along the family; see above).
@@ -272,6 +278,12 @@ def run_psl_es(
         raise ValueError("The PSL hv score and rank_groups > 1 are implemented for two tasks.")
     if uses_hv and hv_ref_point is None:
         raise ValueError("The PSL hv score needs hv_ref_point (evo_hv_ref_point).")
+    fitness_shaping = str(fitness_shaping).strip().lower()
+    if fitness_shaping not in ("centered_ranks", "raw"):
+        raise ValueError(f"Unknown fitness_shaping {fitness_shaping!r}; options: centered_ranks, raw")
+    if fitness_shaping == "raw" and rank_groups > 1:
+        raise ValueError("fitness_shaping=raw does not rank, so it cannot be combined with rank_groups > 1.")
+    raw = fitness_shaping == "raw"
     split = center_a != 1.0 or spread_score != "same"
     psl_guide = str(psl_guide).strip().lower()
     if psl_guide not in PSL_GUIDES:
@@ -333,7 +345,8 @@ def run_psl_es(
            if guided_k > 0 else "")
         + (f" | split update: z weights Dirichlet(a={center_a}), B scores={spread_score}"
            + (f" (margin {ideal_margin})" if spread_score == "ideal" else "") if split else "")
-        + (f" | ranks within {rank_groups} preference groups" if rank_groups > 1 else ""),
+        + (f" | ranks within {rank_groups} preference groups" if rank_groups > 1 else "")
+        + f" | fitness={fitness_shaping}",
         flush=True,
     )
 
@@ -389,6 +402,8 @@ def run_psl_es(
 
         def pair_ranks(scores: np.ndarray) -> torch.Tensor:
             diff = scores[:M] - scores[M:]
+            if raw:  # unshaped: 2 * (d_j / 2) = d_j in the estimator below
+                return torch.as_tensor(diff / 2.0, dtype=torch.float32)
             if rank_groups <= 1:
                 return torch.as_tensor(centered_ranks(np.concatenate([diff, -diff]))[:M], dtype=torch.float32)
             r = np.zeros(M)
@@ -420,7 +435,8 @@ def run_psl_es(
                     continue
                 for k in range(K):
                     d = F[members, k] - F[members + M, k]
-                    rk = torch.as_tensor(centered_ranks(np.concatenate([d, -d]))[: len(members)], dtype=torch.float32)
+                    rk = torch.as_tensor(d / 2.0 if raw else centered_ranks(np.concatenate([d, -d]))[: len(members)],
+                                         dtype=torch.float32)
                     v = rk @ dtheta[members]
                     v = v / v.norm().clamp_min(1e-30)
                     old = task_dirs.get((r, k))

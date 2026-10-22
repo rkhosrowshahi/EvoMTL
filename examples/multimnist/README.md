@@ -57,7 +57,26 @@ Important arguments:
 - `epochs`: Training epochs. Default: `100`.
 - `mode`: `train` or `test`.
 
-**EvoMTL:** pass `--evo_training` (and optional `--evo_*` flags) to use `EvoMTLTrainer` instead of the standard `Trainer`. See [docs/evolutionary_algorithms.md](docs/evolutionary_algorithms.md) for the methods, options, configs, outputs and plotting scripts.
+**EvoMTL:** pass `--evo_training` (and optional `--evo_*` flags) to use `EvoMTLTrainer` instead of the standard `Trainer`. `evo_schedule` selects one of two training directions:
+
+| `evo_schedule` | Training |
+| --- | --- |
+| `evolution` | Multi-objective evolutionary training from the initial weights, no gradient descent (`epochs: 0`). Either a Pareto set / front (NSGA-II, MOPSO-CD and COMO-CMA through `evo_moea`, or Pareto set learning with ES, `evo_moea: psl_es`) or a single Pareto-stationary network (ES with Jacobian descent, `evo_moea: mo_openes` with `evo_es_aggregator: upgrad`). |
+| `gd_then_evolution` (default) | `epochs` of multi-objective gradient descent with `weighting`, then the same evolutionary training as fine-tuning that shapes the Pareto front. |
+
+```shell
+# evolution: MO-OpenES with UPGrad, 10-epoch budget (2344 generations)
+python main.py --config configs/10epochs/mnist/evomtl/mo_openes-upgrad-full/pop_128/adam-lr_0.001/seed1.yaml
+
+# gd_then_evolution: 30 epochs of gradient descent (EW), then NSGA-II on a layer-wise random projection
+python main.py --weighting EW --arch HPS --epochs 30 --evo_training --evo_schedule gd_then_evolution \
+    --evo_moea nsga2 --evo_adapter layerwise_random_proj --evo_adapter_k 128 --evo_adapter_alpha 0.001 \
+    --evo_lb -1 --evo_ub 1 --evo_iterations 100 --evo_pop_size 100
+```
+
+The ES methods (`mo_openes`, `psl_es`) use raw fitness by default (`evo_es_fitness_shaping: raw`): the losses minus the population mean, or the unranked pair differences for PSL. Set `evo_es_fitness_shaping: centered_ranks` for the rank-based OpenAI-ES estimator; PSL's `evo_psl_rank_groups` > 1 needs it.
+
+See [docs/evolutionary_algorithms.md](docs/evolutionary_algorithms.md) for the methods, options, configs, outputs and plotting scripts.
 
 Full help:
 

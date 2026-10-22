@@ -362,43 +362,6 @@ class Trainer(nn.Module):
 
     def train(self, train_dataloaders, test_dataloaders, epochs, 
               val_dataloaders=None, return_weight=False, finish_wandb=True, **kwargs):
-        evo_args = self.kwargs.get('evo_args') or {}
-        if evo_args.get('evo_training'):
-            from LibMTL.evomtl.evo_trainer import EvoMTLTrainer, resolve_adapter_class
-            if not isinstance(self, EvoMTLTrainer):
-                raise TypeError(
-                    "evo_training in config requires EvoMTLTrainer "
-                    "(from LibMTL.evomtl.evo_trainer import EvoMTLTrainer)."
-                )
-            adapter_class = resolve_adapter_class(evo_args['evo_adapter'])
-            schedule = str(evo_args.get('evo_schedule', 'gd_then_moea')).lower().replace(
-                '-', '_'
-            )
-            if schedule in ('moea_then_gd', 'evo_then_gd'):
-                return self.evolve_then_train(
-                    train_dataloaders,
-                    test_dataloaders,
-                    gd_epochs=epochs,
-                    adapter_class=adapter_class,
-                    moea=evo_args['moea'],
-                    evo_kwargs=dict(evo_args['evo_kwargs']),
-                    adapter_kwargs=dict(evo_args['adapter_kwargs']),
-                    adapter_alpha=evo_args['adapter_alpha'],
-                    val_dataloaders=val_dataloaders,
-                    finish_wandb=finish_wandb,
-                )
-            return self.train_then_evolve(
-                train_dataloaders,
-                test_dataloaders,
-                gd_epochs=epochs,
-                adapter_class=adapter_class,
-                moea=evo_args['moea'],
-                evo_kwargs=dict(evo_args['evo_kwargs']),
-                adapter_kwargs=dict(evo_args['adapter_kwargs']),
-                adapter_alpha=evo_args['adapter_alpha'],
-                val_dataloaders=val_dataloaders,
-                finish_wandb=finish_wandb,
-            )
         if self.weighting in self.bilevel_methods:
             train_func = self.train_bilevel
         else:

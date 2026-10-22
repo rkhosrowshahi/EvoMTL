@@ -1,8 +1,15 @@
 """Evolutionary multi-objective training on low-dimensional parameter-sharing codes.
 
-Default schedule (``gd_then_moea``, :meth:`EvoMTLTrainer.train_then_evolve`):
+Two schedules (``evo_schedule``):
 
-1. Gradient-descent warmup (reuse :meth:`Trainer.train`).
+* ``evolution`` (:meth:`EvoMTLTrainer.evolve`): multi-objective evolutionary training from the
+  initial weights, steps 2–4 below. Either a Pareto front (NSGA-II, MOPSO-CD, COMO-CMA,
+  PSL-ES) or a single Pareto-stationary network (MO-OpenES with Jacobian aggregation, e.g. UPGrad).
+* ``gd_then_evolution`` (:meth:`EvoMTLTrainer.train_then_evolve`, default): multi-objective
+  gradient descent (step 1), then the same evolutionary training as fine-tuning that shapes the
+  Pareto front.
+
+1. Gradient descent with the configured weighting (:meth:`Trainer.train`), ``gd_then_evolution`` only.
 2. Snapshot ``theta_0`` and build a parameter-sharing ``adapter`` so that
    ``theta = theta_0 + adapter.forward(z, alpha=evo_adapter_alpha)`` (``alpha`` scales ``delta_theta``
    inside :meth:`~LibMTL.evomtl.parameter_sharing` ``process``; config ``evo_adapter_alpha``
@@ -12,11 +19,6 @@ Default schedule (``gd_then_moea``, :meth:`EvoMTLTrainer.train_then_evolve`):
 4. Form a *Pareto-center* latent vector by averaging Pareto-set points weighted by
    marginal hypervolume contribution, apply it, then evaluate train and test (same
    path as :meth:`Trainer.test`) and save.
-
-Alternate schedule (``moea_then_gd``, :meth:`EvoMTLTrainer.evolve_then_train`): run
-steps 2–4 on the initial weights (no GD warmup), apply the Pareto-center ``theta``,
-then run full-parameter GD for the configured epochs—using MOEA as a structured
-initialization when subspace-only fine-tuning stalls.
 
 References:
 - pymoo ask-and-tell: https://www.pymoo.org/algorithms/usage.html#nb-algorithms-ask-and-tell
@@ -121,6 +123,48 @@ class EvoMTLTrainer(Trainer):
         self.adapter: Any = None
         self.adapter_alpha: float = 1.0
         self.last_evo: Dict[str, Any] = {}
+
+    def train(
+        self,
+        train_dataloaders: Any,
+        test_dataloaders: Any,
+        epochs: int,
+        val_dataloaders: Any = None,
+        return_weight: bool = False,
+        finish_wandb: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Run the configured ``evo_schedule`` (``evo_args`` from :func:`LibMTL.config.prepare_args`).
+
+        * ``evolution``: :meth:`evolve`, multi-objective evolutionary training from the initial
+          weights (``epochs`` must be 0);
+        * ``gd_then_evolution``: :meth:`train_then_evolve`, ``epochs`` of multi-objective gradient
+          descent, then evolutionary fine-tuning of the Pareto front.
+
+        Without ``evo_training`` this is plain :meth:`Trainer.train`.
+        """
+        evo_args = self.kwargs.get("evo_args") or {}
+        if not evo_args.get("evo_training"):
+            return super().train(train_dataloaders, test_dataloaders, epochs, val_dataloaders,
+                                 return_weight, finish_wandb=finish_wandb, **kwargs)
+        schedule = evo_args.get("evo_schedule", "gd_then_evolution")
+        evo = dict(
+            adapter_class=resolve_adapter_class(evo_args["evo_adapter"]),
+            moea=evo_args["moea"],
+            evo_kwargs=dict(evo_args["evo_kwargs"]),
+            adapter_kwargs=dict(evo_args["adapter_kwargs"]),
+            adapter_alpha=evo_args["adapter_alpha"],
+            finish_wandb=finish_wandb,
+        )
+        if schedule == "evolution":
+            if int(epochs) != 0:
+                raise ValueError(f"evo_schedule evolution runs no gradient descent, but epochs={epochs}; "
+                                 "set epochs: 0 or use gd_then_evolution.")
+            return self.evolve(train_dataloaders, test_dataloaders, **evo)
+        if schedule == "gd_then_evolution":
+            return self.train_then_evolve(train_dataloaders, test_dataloaders, gd_epochs=epochs,
+                                          val_dataloaders=val_dataloaders, **evo)
+        raise ValueError(f"Unknown evo_schedule {schedule!r}; options: evolution, gd_then_evolution")
 
     def capture_base_parameters(self) -> None:
         """Store ``theta_0`` as a flat vector on the trainer device."""
@@ -623,135 +667,28 @@ class EvoMTLTrainer(Trainer):
             self, train_dataloaders, test_dataloaders=test_dataloaders, **evo_kwargs
         )
 
-    def evolve_then_train(
+    def evolve(
         self,
         train_dataloaders: Any,
         test_dataloaders: Any,
-        gd_epochs: int,
         adapter_class: Type[Any],
         moea: str = "nsga2",
         evo_kwargs: Optional[Dict[str, Any]] = None,
         adapter_kwargs: Optional[Dict[str, Any]] = None,
         adapter_alpha: float = 1.0,
-        val_dataloaders: Any = None,
         finish_wandb: bool = True,
     ) -> Dict[str, Any]:
-        """MOEA on ``z`` from initial ``theta_0`` → Pareto-center weights → full-space GD.
+        """Multi-objective evolutionary training from the initial weights (schedule ``evolution``).
 
-        ``theta_0`` is the model at initialization (after any ``load_path`` restore).
-        After MOEA, :meth:`adapt_parameters` leaves the network at the Pareto-center
-        ``theta_0 + adapter.forward(pareto_center_X, ...)``; gradient steps then update all parameters freely
-        (parameter sharing is not used during GD).
-
-        Checkpoints: ``evo_result.pt`` and ``model_evo.pt`` are written after the MOEA
-        phase (Pareto-center state before GD). Standard GD saves ``best.pt`` under
-        :attr:`Trainer.save_path` when applicable.
+        Covers Pareto-front methods (NSGA-II, MOPSO, COMO-CMA, PSL-ES) and single-network ES with
+        Jacobian aggregation (MO-OpenES / UPGrad). The network ends at
+        ``theta_0 + adapter.forward(pareto_center_X, ...)``; see :meth:`_evolution_phase` for the
+        evaluation and checkpoints.
         """
-        evo_kwargs = dict(evo_kwargs or {})
-        adapter_kwargs = dict(adapter_kwargs or {})
         moea_key = moea.lower()
-
-        w = getattr(self, "weighting", None)
-        w_part = f", weighting={w}" if w is not None else ""
-        print(
-            f"[EvoMTL] MOEA-first schedule: {moea_key} on initial weights, "
-            f"then GD for {int(gd_epochs)} epoch(s){w_part}.",
-            flush=True,
-        )
-
-        self.prepare_evolution(
-            adapter_class, adapter_alpha=adapter_alpha, **adapter_kwargs
-        )
-
-        n_outer = int(evo_kwargs.get("num_iterations", 0))
-
-        evo_kwargs.setdefault("wandb_step_offset", 1)
-        wandb_base = int(evo_kwargs["wandb_step_offset"])
-        post_evo_step = wandb_base + max(0, n_outer)
-
-        evo_out = self._run_moea(moea_key, train_dataloaders, test_dataloaders, evo_kwargs)
-
-        if getattr(self, "_wandb_enabled", False):
-            zc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1)
-            self._wandb_log(
-                {"evo/final_pareto_center_X_l2": float(np.linalg.norm(zc))},
-                step=post_evo_step,
-            )
-
-        if moea_key not in ("comocma", "mocma", "mo-cma-es"):
-            self.print_pareto_front_objective_stats(evo_out["pareto_F"])
-
-        train_eval_metrics = self.test(
-            train_dataloaders,
-            epoch=None,
-            mode="train",
-            wandb_log_step=post_evo_step,
-            random_minibatch=True,
-            suppress_display=True,
-            return_metrics=True,
-        )
-        test_eval_metrics = self.test(
-            test_dataloaders,
-            epoch=None,
-            mode="test",
-            wandb_log_step=post_evo_step,
-            suppress_display=True,
-            return_metrics=True,
-        )
-        self.print_compact_train_test_line(
-            train_eval_metrics,
-            test_eval_metrics,
-            epoch_label=post_evo_step,
-        )
-
-        if self.save_path is not None:
-            os.makedirs(self.save_path, exist_ok=True)
-            torch.save(
-                {
-                    "theta_0": self.theta_0,
-                    "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"], dtype=torch.float32),
-                    "pareto_F": evo_out["pareto_F"],
-                    "pareto_X": evo_out["pareto_X"],
-                    "hv_weights": evo_out["hv_weights"],
-                    "hv_ref_point": evo_out["hv_ref_point"],
-                    "hv_center_aggregation": evo_out.get("hv_center_aggregation"),
-                    "hv_softmax_temperature": evo_out.get("hv_softmax_temperature"),
-                    "method": evo_out["method"],
-                    "schedule": "moea_then_gd",
-                },
-                os.path.join(self.save_path, "evo_result.pt"),
-            )
-            torch.save(
-                self.model.state_dict(),
-                os.path.join(self.save_path, "model_evo.pt"),
-            )
-
-        print(
-            f"[EvoMTL] Switching from MOEA to full-parameter GD: "
-            f"{int(gd_epochs)} epoch(s){w_part}.",
-            flush=True,
-        )
-
-        _prev = self.kwargs.get("evo_args")
-        self.kwargs["evo_args"] = {"evo_training": False}
-        prev_off = getattr(self, "_wandb_step_offset", 0)
-        # Post-MOEA train/test above uses wandb_log_step=post_evo_step; GD x-axis continues after it.
-        self._wandb_step_offset = int(post_evo_step) + 1
-        try:
-            self.train(
-                train_dataloaders,
-                test_dataloaders,
-                int(gd_epochs),
-                val_dataloaders=val_dataloaders,
-                finish_wandb=False,
-            )
-        finally:
-            self._wandb_step_offset = prev_off
-            if _prev is None:
-                self.kwargs.pop("evo_args", None)
-            else:
-                self.kwargs["evo_args"] = _prev
-
+        print(f"[EvoMTL] Evolutionary training: {moea_key} from the initial weights.", flush=True)
+        evo_out = self._evolution_phase(train_dataloaders, test_dataloaders, adapter_class, moea_key, evo_kwargs,
+                                        adapter_kwargs, adapter_alpha, wandb_step_offset=1, schedule="evolution")
         self._wandb_finish_if(finish_wandb)
         return evo_out
 
@@ -768,71 +705,70 @@ class EvoMTLTrainer(Trainer):
         val_dataloaders: Any = None,
         finish_wandb: bool = True,
     ) -> Dict[str, Any]:
-        """GD warmup → snapshot → adapter → MOEA → Pareto-center train/test (same as :meth:`Trainer.test`).
+        """Multi-objective gradient descent, then evolutionary fine-tuning (schedule ``gd_then_evolution``).
 
-        Evo checkpoints (``evo_result.pt``, ``model_evo.pt``) use :attr:`Trainer.save_path`
-        (same directory as ``best.pt``).
+        ``gd_epochs`` of :meth:`Trainer.train` with the configured weighting, then the same
+        evolutionary phase as :meth:`evolve` starting from the trained weights, to shape the
+        Pareto front. GD checkpoints (``best.pt``) and the evolution checkpoints share
+        :attr:`Trainer.save_path`.
 
         Parameters
         ----------
         moea : str
             ``"nsga2"``, ``"mopso"`` / ``"mopso_cd"``, ``"comocma"``, ``"mo_openes"`` or ``"psl_es"``.
         evo_kwargs : dict
-            Passed to :func:`~LibMTL.evomtl.moea.nsga2.run_nsga2`,
-            :func:`~LibMTL.evomtl.moea.mopso.run_mopso`,
-            or :func:`~LibMTL.evomtl.moea.comocma.run_comocma` (first arg is this trainer).
+            Passed to the runner of ``moea`` in :mod:`LibMTL.evomtl.moea` (first arg is this trainer).
         """
-        evo_kwargs = dict(evo_kwargs or {})
-        adapter_kwargs = dict(adapter_kwargs or {})
-
-        # GD phase only: mask config so Trainer.train does not recurse into MOEA.
-        _prev = self.kwargs.get('evo_args')
-        self.kwargs['evo_args'] = {'evo_training': False}
-        try:
-            self.train(
-                train_dataloaders,
-                test_dataloaders,
-                gd_epochs,
-                val_dataloaders=val_dataloaders,
-                finish_wandb=False,
-            )
-        finally:
-            if _prev is None:
-                self.kwargs.pop('evo_args', None)
-            else:
-                self.kwargs['evo_args'] = _prev
+        super().train(train_dataloaders, test_dataloaders, gd_epochs,
+                      val_dataloaders=val_dataloaders, finish_wandb=False)
 
         moea_key = moea.lower()
         w = getattr(self, "weighting", None)
         w_part = f", weighting={w}" if w is not None else ""
-        print(
-            f"[EvoMTL] Switching from GD warmup to MOEA ({moea_key}): "
-            f"finished {gd_epochs} epoch(s){w_part}.",
-            flush=True,
-        )
+        print(f"[EvoMTL] Switching from gradient descent ({gd_epochs} epoch(s){w_part}) to evolutionary "
+              f"fine-tuning: {moea_key}.", flush=True)
+        # After GD, the last wandb step is ``gd_epochs`` (1-based epochs); evolution starts at ``gd_epochs + 1``.
+        evo_out = self._evolution_phase(train_dataloaders, test_dataloaders, adapter_class, moea_key, evo_kwargs,
+                                        adapter_kwargs, adapter_alpha, wandb_step_offset=int(gd_epochs) + 1,
+                                        schedule="gd_then_evolution")
+        self._wandb_finish_if(finish_wandb)
+        return evo_out
 
-        self.prepare_evolution(
-            adapter_class, adapter_alpha=adapter_alpha, **adapter_kwargs
-        )
+    def _evolution_phase(
+        self,
+        train_dataloaders: Any,
+        test_dataloaders: Any,
+        adapter_class: Type[Any],
+        moea_key: str,
+        evo_kwargs: Optional[Dict[str, Any]],
+        adapter_kwargs: Optional[Dict[str, Any]],
+        adapter_alpha: float,
+        wandb_step_offset: int,
+        schedule: str,
+    ) -> Dict[str, Any]:
+        """Evolutionary phase of both schedules, from the current weights.
 
-        n_outer = int(evo_kwargs.get("num_iterations", 0))
+        Snapshot ``theta_0`` and build the parameter-sharing adapter, run the MOEA / ES (wandb steps
+        from ``wandb_step_offset``), apply the Pareto-center weights, evaluate them on train (one
+        random minibatch) and test, and write ``evo_result.pt`` and ``model_evo.pt`` under
+        :attr:`Trainer.save_path`.
+        """
+        evo_kwargs = dict(evo_kwargs or {})
+        adapter_kwargs = dict(adapter_kwargs or {})
 
-        # After GD, last wandb step is ``gd_epochs`` (1-based epochs); evo starts at ``gd_epochs + 1``.
-        evo_kwargs.setdefault("wandb_step_offset", int(gd_epochs) + 1)
-        wandb_base = int(evo_kwargs["wandb_step_offset"])
-        post_evo_step = wandb_base + max(0, n_outer)
+        self.prepare_evolution(adapter_class, adapter_alpha=adapter_alpha, **adapter_kwargs)
+
+        evo_kwargs.setdefault("wandb_step_offset", int(wandb_step_offset))
+        post_evo_step = int(evo_kwargs["wandb_step_offset"]) + max(0, int(evo_kwargs.get("num_iterations", 0)))
 
         evo_out = self._run_moea(moea_key, train_dataloaders, test_dataloaders, evo_kwargs)
 
         if getattr(self, "_wandb_enabled", False):
             zc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1)
-            self._wandb_log(
-                {"evo/final_pareto_center_X_l2": float(np.linalg.norm(zc))},
-                step=post_evo_step,
-            )
+            self._wandb_log({"evo/final_pareto_center_X_l2": float(np.linalg.norm(zc))}, step=post_evo_step)
 
-        # Pareto-center weights are already applied in run_nsga2 / run_mopso / run_comocma.
-        # COMO-CMA prints ref-cut Pareto stats each iteration; pymoo MOEAs only here.
+        # Pareto-center weights are already applied by the runners. COMO-CMA prints ref-cut Pareto
+        # stats each iteration; the others only here.
         if moea_key not in ("comocma", "mocma", "mo-cma-es"):
             self.print_pareto_front_objective_stats(evo_out["pareto_F"])
 
@@ -853,11 +789,7 @@ class EvoMTLTrainer(Trainer):
             suppress_display=True,
             return_metrics=True,
         )
-        self.print_compact_train_test_line(
-            train_eval_metrics,
-            test_eval_metrics,
-            epoch_label=post_evo_step,
-        )
+        self.print_compact_train_test_line(train_eval_metrics, test_eval_metrics, epoch_label=post_evo_step)
 
         if self.save_path is not None:
             os.makedirs(self.save_path, exist_ok=True)
@@ -872,10 +804,9 @@ class EvoMTLTrainer(Trainer):
                     "hv_center_aggregation": evo_out.get("hv_center_aggregation"),
                     "hv_softmax_temperature": evo_out.get("hv_softmax_temperature"),
                     "method": evo_out["method"],
+                    "schedule": schedule,
                 },
                 os.path.join(self.save_path, "evo_result.pt"),
             )
             torch.save(self.model.state_dict(), os.path.join(self.save_path, "model_evo.pt"))
-
-        self._wandb_finish_if(finish_wandb)
         return evo_out

@@ -120,14 +120,15 @@ _parser.add_argument('--kgamma', type=float, default=1.0, help='gamma for DSelec
 
 # EvoMTL (MOEA on parameter sharing; use :class:`LibMTL.evomtl.evo_trainer.EvoMTLTrainer`)
 _parser.add_argument('--evo_training', action='store_true', default=False,
-                    help='enable EvoMTL; phase order set by --evo_schedule (default: GD then MOEA)')
+                    help='enable EvoMTL; training schedule set by --evo_schedule (default: GD then evolution)')
 _parser.add_argument(
     '--evo_schedule',
     type=str,
-    default='gd_then_moea',
-    choices=('gd_then_moea', 'moea_then_gd'),
-    help='gd_then_moea: run --epochs of GD then MOEA (default). '
-         'moea_then_gd: MOEA on initial weights (--evo_iterations) then --epochs of full-parameter GD.',
+    default='gd_then_evolution',
+    choices=('evolution', 'gd_then_evolution'),
+    help='evolution: multi-objective evolutionary training (MOEA / ES, --evo_iterations) from the initial '
+         'weights, no gradient descent (needs --epochs 0). gd_then_evolution (default): --epochs of '
+         'multi-objective gradient descent, then evolutionary fine-tuning of the Pareto front.',
 )
 _parser.add_argument(
     '--evo_adapter',
@@ -268,9 +269,10 @@ _parser.add_argument('--evo_es_sigma_decay', type=float, default=1.0,
                     help='MO-OpenES: multiply sigma by this after every iteration (1.0 = constant)')
 _parser.add_argument('--evo_es_sigma_min', type=float, default=0.0,
                     help='MO-OpenES: lower bound on sigma when decaying')
-_parser.add_argument('--evo_es_fitness_shaping', type=str, default='centered_ranks', choices=('centered_ranks', 'raw'),
-                    help='MO-OpenES: fitness shaping before the gradient estimate: centered_ranks (default) or raw '
-                         '(losses minus the population mean, the unshaped OpenAI-ES estimator)')
+_parser.add_argument('--evo_es_fitness_shaping', type=str, default='raw', choices=('centered_ranks', 'raw'),
+                    help='MO-OpenES / PSL-OpenES: fitness shaping before the gradient estimate: raw (default; '
+                         'losses minus the population mean, or unranked pair differences for PSL: the unbiased '
+                         'estimator, whose size Adam\'s moments can track) or centered_ranks')
 _parser.add_argument('--evo_es_sigma_schedule', type=str, default='constant', choices=('constant', 'cosine'),
                     help='MO-OpenES: sigma schedule: constant (with --evo_es_sigma_decay) or cosine annealing from '
                          '--evo_es_sigma to --evo_es_sigma_min over --evo_iterations')
@@ -748,6 +750,7 @@ def _make_evo_args(params):
             'spread_score': str(params.evo_psl_spread_score).strip().lower(),
             'ideal_margin': float(params.evo_psl_ideal_margin),
             'rank_groups': int(params.evo_psl_rank_groups),
+            'fitness_shaping': str(params.evo_es_fitness_shaping).strip().lower(),
             'psl_guide': str(params.evo_psl_guide).strip().lower(),
             'antithetic': bool(params.evo_es_antithetic),
             'optim': str(params.evo_es_optim),
@@ -768,7 +771,7 @@ def _make_evo_args(params):
 
     return {
         'evo_training': True,
-        'evo_schedule': getattr(params, 'evo_schedule', 'gd_then_moea'),
+        'evo_schedule': getattr(params, 'evo_schedule', 'gd_then_evolution'),
         'evo_adapter': params.evo_adapter,
         'moea': params.evo_moea,
         'adapter_alpha': params.evo_adapter_alpha,

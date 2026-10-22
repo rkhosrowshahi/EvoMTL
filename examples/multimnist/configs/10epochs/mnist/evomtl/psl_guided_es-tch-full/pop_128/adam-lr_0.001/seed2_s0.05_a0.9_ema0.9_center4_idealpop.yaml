@@ -32,7 +32,7 @@ epochs: 0                      # no gradient-descent phase: training is ES only
 
 # Evolution strategy (MO-PSL-TCH-GuidedES); evo_moea selects the ES code
 evo_training: true
-evo_schedule: moea_then_gd     # ES first, then `epochs` of gradient descent (none here)
+evo_schedule: evolution        # evolutionary training only, no gradient descent
 evo_moea: psl_es
 evo_adapter: full
 evo_adapter_alpha: 1.0

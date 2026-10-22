@@ -213,7 +213,7 @@ def run_mo_openes(
     sigma_adapt: str = "none",
     sigma_lr: float = 0.0,
     sigma_max_change: float = 0.2,
-    fitness_shaping: str = "centered_ranks",
+    fitness_shaping: str = "raw",
     aggregator: str = "upgrad",
     antithetic: bool = True,
     optim: str = "adam",
@@ -265,8 +265,9 @@ def run_mo_openes(
         PGPE. ``sigma_max_change`` bounds PGPE's relative change per generation. Not combinable with
         Guided ES sampling.
     fitness_shaping : str
-        ``"centered_ranks"`` (default, as evosax / OpenAI-ES) or ``"raw"``: the losses minus the population
-        mean, i.e. the unshaped estimator ``F @ eps / (N sigma)`` of the Gaussian-smoothed gradient.
+        ``"raw"`` (default): the losses minus the population mean, i.e. the unshaped estimator
+        ``F @ eps / (N sigma)`` of the Gaussian-smoothed gradient, whose size Adam's moments can track; or
+        ``"centered_ranks"`` (evosax / OpenAI-ES), bounded and robust to outliers but of near-constant size.
     aggregator : str
         ``"upgrad"`` (default), ``"mean"``, or ``"ws"`` (see module docstring).
     antithetic : bool
