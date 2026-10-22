@@ -1,4 +1,4 @@
-"""MOPSO-CD (pymoo) ask-and-tell on latent vectors ``z``."""
+"""MOPSO-CD (pymoo) ask-and-tell on the weights ``theta``."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from .common import configure_moea_random_seed, inject_pareto_center_into_pop, should_run_full_test
+from .common import configure_moea_random_seed, inject_pareto_center_into_pop, should_run_full_test, theta_box
 from .hv import (
     default_hv_ref_point,
     marginal_hypervolume_weights,
@@ -38,20 +38,19 @@ def run_mopso(
     pso_max_velocity_rate: float = 0.5,
     pso_archive_size: int = 200,
 ) -> Dict[str, Any]:
-    """MOPSO-CD (pymoo :class:`~pymoo.algorithms.moo.mopso_cd.MOPSO_CD`) ask-and-tell on ``z``.
+    """MOPSO-CD (pymoo :class:`~pymoo.algorithms.moo.mopso_cd.MOPSO_CD`) ask-and-tell on the weights ``theta``.
 
     Crowding-distance multi-objective PSO; same outer loop contract as :func:`run_nsga2`.
     """
-    if trainer.adapter is None:
-        raise RuntimeError("init_parameter_sharing() first.")
+    if trainer.theta_0 is None:
+        raise RuntimeError("prepare_evolution() first.")
 
     configure_moea_random_seed(seed)
 
-    n_var = int(trainer.adapter.num_dims)
+    n_var = int(trainer.theta_0.numel())
     n_obj = trainer.task_num
 
-    xl = np.full(n_var, lb, dtype=np.float64)
-    xu = np.full(n_var, ub, dtype=np.float64)
+    xl, xu = theta_box(trainer, lb, ub)
     problem = Problem(
         n_var=n_var,
         n_obj=n_obj,
@@ -80,7 +79,7 @@ def run_mopso(
             pop_F = algorithm.pop.get("F")
             pop_X = algorithm.pop.get("X")
             for i in range(len(pop_X)):
-                trainer.adapt_parameters(pop_X[i])
+                trainer.set_theta(pop_X[i])
                 pop_F[i] = trainer.evaluate_multiobjective_losses(
                     train_dataloaders, prefetched_batches=shared_batches
                 )
@@ -89,7 +88,7 @@ def run_mopso(
         offspring_X = offspring.get("X")
         offspring_F = np.zeros((len(offspring_X), trainer.task_num))
         for i in range(len(offspring_X)):
-            trainer.adapt_parameters(offspring_X[i])
+            trainer.set_theta(offspring_X[i])
             offspring_F[i] = trainer.evaluate_multiobjective_losses(
                 train_dataloaders, prefetched_batches=shared_batches
             )
@@ -98,7 +97,7 @@ def run_mopso(
         algorithm.tell(infills=offspring)
         result = algorithm.result()
         pareto_front = result.opt.get("F")
-        pareto_latents = result.opt.get("X")
+        pareto_thetas = result.opt.get("X")
 
         elapsed = time.perf_counter() - t0
         trainer._print_evo_progress(
@@ -120,8 +119,8 @@ def run_mopso(
             aggregation=hv_center_aggregation,
             softmax_temperature=hv_softmax_temperature,
         )
-        pareto_center_X = pareto_center_from_weights(pareto_latents, hv_weights)
-        trainer.adapt_parameters(pareto_center_X)
+        pareto_center_X = pareto_center_from_weights(pareto_thetas, hv_weights)
+        trainer.set_theta(pareto_center_X)
         train_batch_metrics = trainer.metrics_snapshot_from_prefetched_batches(
             shared_batches
         )
@@ -158,7 +157,7 @@ def run_mopso(
                 for i, task in enumerate(trainer.task_name)
             )
             print(
-                f"[EvoMTL] Pareto z TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
+                f"[EvoMTL] Pareto theta TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
                 flush=True,
             )
 
@@ -185,7 +184,7 @@ def run_mopso(
         hv_ref_point = default_hv_ref_point(pareto_F)
     pareto_center_X = pareto_center_from_weights(pareto_X, hv_weights)
 
-    trainer.adapt_parameters(pareto_center_X)
+    trainer.set_theta(pareto_center_X)
     out = {
         "method": "MOPSO-CD",
         "algorithm": algorithm,

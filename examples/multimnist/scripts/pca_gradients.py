@@ -80,7 +80,7 @@ def path_levels(a, b, L, path2, n_path=10, n_above=4):
 
 
 def path_pca(Z):
-    """PCA of the search-mean positions Z [S, D] (z = theta - theta_0).
+    """PCA of the search-mean positions Z [S, D] (the weights theta; theta - theta_0 in older runs, same PCA).
 
     Returns the centre mu [1, D], unit principal axes comps [D, 2], the 2-D path [S, 2] and the
     explained-variance ratios of PC1/PC2. Shared with loss_landscape.py so the grid uses the same axes.

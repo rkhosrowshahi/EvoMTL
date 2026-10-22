@@ -2,7 +2,8 @@
 
 Reads ``gradients.pth.tar`` (search-mean snapshots) and ``evo_result.pt`` (``theta_0``) from a run
 folder, takes the same PC1-PC2 plane as ``pca_gradients.py`` (via ``path_pca``), and evaluates both
-task losses at every grid point ``theta = theta_0 + mu + a * PC1 + b * PC2`` on a fixed set of
+task losses at every grid point ``theta = mu + a * PC1 + b * PC2`` (runs saved before the search was on
+``theta`` itself stored ``theta - theta_0``, and get ``theta_0`` added back) on a fixed set of
 training images. Writes ``landscape.pt`` next to the inputs; ``pca_gradients.py`` then draws the
 contours under the trajectory.
 
@@ -25,6 +26,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import transforms
 
 EXAMPLE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.dirname(os.path.dirname(EXAMPLE_DIR)), EXAMPLE_DIR, os.path.dirname(os.path.abspath(__file__))]
@@ -76,7 +78,10 @@ def main():
     args = p.parse_args()
 
     g = torch.load(os.path.join(args.run_dir, "gradients.pth.tar"), map_location="cpu", weights_only=False)
-    theta0 = torch.load(os.path.join(args.run_dir, "evo_result.pt"), map_location="cpu", weights_only=False)["theta_0"].float()
+    res = torch.load(os.path.join(args.run_dir, "evo_result.pt"), map_location="cpu", weights_only=False)
+    theta0 = res["theta_0"].float()
+    # snapshots are the weights theta; older runs (no "search_space" key) saved theta - theta_0
+    base = torch.zeros_like(theta0) if res.get("search_space") == "theta" else theta0
     tasks = g["tasks"]
     keep = g["generation"] >= args.from_gen
     g["mean"], g["generation"] = g["mean"][keep], g["generation"][keep]
@@ -92,13 +97,16 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     assert n_params == theta0.numel() == g["dims"], (n_params, theta0.numel(), g["dims"])
 
-    ds = MultiMNISTDataset(root=args.dataset_path, dataset=args.dataset.removesuffix("-36p") + suffix, train=True)
+    # main.py's input transform (the 28x28 images are normalized; the 36x36 pickles ignore it and stay raw 0-255)
+    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+    ds = MultiMNISTDataset(root=args.dataset_path, dataset=args.dataset.removesuffix("-36p") + suffix, train=True,
+                           transform=transform)
     x = torch.stack([ds[i][0] for i in range(args.n_images)])  # through __getitem__, as in training
     y = {t: ds.targets[: args.n_images, k] for k, t in enumerate(tasks)}
 
     @torch.no_grad()
-    def losses_at(z):
-        theta = theta0 + torch.as_tensor(z, dtype=torch.float32)
+    def losses_at(point):
+        theta = base + torch.as_tensor(point, dtype=torch.float32)
         nn.utils.vector_to_parameters(theta, model.parameters())
         out = model(x)
         return [float(F.cross_entropy(out[t], y[t])) for t in tasks]
@@ -114,7 +122,7 @@ def main():
             loss[j, i] = losses_at(mu[0] + ai * comps[:, 0] + bj * comps[:, 1])
         print(f"\rgrid row {j + 1}/{args.grid}", end="", flush=True)
     print()
-    path_loss = np.array([losses_at(z) for z in g["mean"].double().numpy()])
+    path_loss = np.array([losses_at(m) for m in g["mean"].double().numpy()])
     out = {"a": a, "b": b, "loss": loss, "path_loss": path_loss, "tasks": tasks,
            "n_images": args.n_images, "generation": g["generation"].numpy()}
     out_name = "landscape.pt" if args.from_gen == 10 else f"landscape_from{args.from_gen}.pt"

@@ -48,7 +48,10 @@ DEFAULT_LOGS = [
 ]
 LABELS = {"upgrad": "MO-UPGrad-OpenES", "mean": "MO-Mean-OpenES", "ws": "OpenES",
           "psl_tch": "MO-PSL-TCH-OpenES", "psl_ws": "MO-PSL-WS-OpenES",
-          "psl_hv": "MO-PSL-HV-OpenES"}  # psl_*: evo_moea=psl_es runs
+          "psl_hv": "MO-PSL-HV-OpenES",  # psl_*: evo_moea=psl_es runs
+          "tpsl_tch": "MO-TPSL-TCH-OpenES", "tpsl_ws": "MO-TPSL-WS-OpenES",
+          "tpsl_hv": "MO-TPSL-HV-OpenES",  # tpsl_*: evo_moea=tpsl_es runs (Tangent PSL-ES)
+          "dcpsl_upgrad": "MO-DCPSL-UPGrad-OpenES"}  # evo_moea=dcpsl_es runs (Dual-cone PSL-ES)
 
 # Objective-space marker and line style per method (also used by plot_psl_front.py)
 MARKERS = {"MO-UPGrad-OpenES": "o", "MO-Mean-OpenES": "s", "OpenES": "^",
@@ -56,12 +59,16 @@ MARKERS = {"MO-UPGrad-OpenES": "o", "MO-Mean-OpenES": "s", "OpenES": "^",
            "MO-PSL-TCH-OpenES": "*", "MO-PSL-TCH-GuidedES": "X", "MO-PSL-WS-OpenES": "h", "MO-PSL-WS-GuidedES": "p",
            "MO-PSL-TCH-GuidedES (centred)": "d", "MO-PSL-TCH-GuidedES (centred + ideal)": "8",
            "MO-PSL-TCH-GuidedES (centred + HV)": ">", "MO-PSL-HV-GuidedES (centred)": "H",
-           "MO-PSL-TCH-GuidedES (centred + ideal + task guide)": "P", "MO-PSL-TCH-GuidedES (task guide)": "h"}
+           "MO-PSL-TCH-GuidedES (centred + ideal + task guide)": "P", "MO-PSL-TCH-GuidedES (task guide)": "h",
+           "MO-TPSL-TCH-OpenES": "<", "MO-TPSL-TCH-GuidedES": "^",
+           "MO-DCPSL-UPGrad-OpenES": "d", "MO-DCPSL-UPGrad-GuidedES": "D"}
 LINESTYLES = {"MO-UPGrad-OpenES": "solid", "MO-Mean-OpenES": "dotted", "OpenES": "dashed",
               "MO-UPGrad-GuidedES": "solid", "MO-Mean-GuidedES": "dotted", "GuidedES": "dashed",
               "MO-PSL-TCH-OpenES": "dashdot", "MO-PSL-TCH-GuidedES": "dashdot", "MO-PSL-WS-OpenES": "dashdot",
               "MO-PSL-WS-GuidedES": "dashdot", "MO-PSL-TCH-GuidedES (centred)": "dashdot",
-              "MO-PSL-TCH-GuidedES (centred + ideal)": "dashdot"}
+              "MO-PSL-TCH-GuidedES (centred + ideal)": "dashdot",
+              "MO-TPSL-TCH-OpenES": (0, (5, 1, 1, 1)), "MO-TPSL-TCH-GuidedES": (0, (5, 1, 1, 1)),
+              "MO-DCPSL-UPGrad-OpenES": (0, (1, 1)), "MO-DCPSL-UPGrad-GuidedES": (0, (1, 1))}
 
 # The first generations have loss ~15 (raw 0-255 inputs). Test-loss and objective-space plots
 # drop evaluations at generation <= SKIP_TEST; train-loss y-axes are capped using the values
@@ -77,7 +84,7 @@ COS_RE = re.compile(
     r"^\[EvoMTL\] \S+ (\d+)/\d+ .*true_cos=\[([^\]]*)\] dir_cos=([+-]?[\d.]+)"
 )
 DIMS_RE = re.compile(r"dims=(\d+) \| pop=")
-MEAN_RE = re.compile(r"^\[EvoMTL\] Mean z TRAIN \(curr batch\) iteration (\d+) \| (.+)$")
+MEAN_RE = re.compile(r"^\[EvoMTL\] Mean (?:z|theta) TRAIN \(curr batch\) iteration (\d+) \| (.+)$")
 
 
 def parse_log(path):
@@ -102,7 +109,7 @@ def parse_log(path):
                 v = [float(x) for x in m.groups()[1:]]
                 test.append((gen, v[4], v[5], v[6], v[7]))
                 train[gen] = (v[0], v[2])
-    if cfg is None or not ("aggregator" in cfg or "scalarization" in cfg):
+    if cfg is None or not ("aggregator" in cfg or "scalarization" in cfg or "center_fraction" in cfg):
         return None
     d, name = os.path.split(path)  # metrics.csv for stdout.log, <name>_metrics.csv for other logs
     csv_path = os.path.join(d, "metrics.csv" if name == "stdout.log" else os.path.splitext(name)[0] + "_metrics.csv")
@@ -114,7 +121,10 @@ def parse_log(path):
     train = np.array([(g, *train[g]) for g in sorted(train) if g <= n_iter]).reshape(-1, 3)
     last = int(max(test[-1, 0] if len(test) else 0, train[-1, 0] if len(train) else 0))
     return {
-        "aggregator": cfg["aggregator"] if "aggregator" in cfg else "psl_" + cfg["scalarization"],
+        # PSL runs log their scalarization instead of an aggregator; Tangent PSL-ES runs also log c0, Dual-cone
+        # PSL-ES runs log center_fraction (and neither)
+        "aggregator": "dcpsl_upgrad" if "center_fraction" in cfg else cfg["aggregator"] if "aggregator" in cfg
+        else ("tpsl_" if "c0" in cfg else "psl_") + cfg["scalarization"],
         "variant": psl_variant(cfg),
         "pop": int(cfg["pop_size"]), "lr": float(cfg["lr"]),
         "guided": int(cfg.get("guided_k", 0)) > 0,
@@ -153,6 +163,10 @@ def psl_variant(cfg):
         parts.append({"ideal": "ideal", "hv": "HV"}[spread])
     if cfg.get("psl_guide", "update") == "tasks":
         parts.append("task guide")
+    if "c0" in cfg and not cfg.get("brake", False):  # Tangent PSL-ES without the brake on c (runs before it existed too)
+        parts.append("no brake")
+    if "center_fraction" in cfg and not cfg.get("normalize", True):  # Dual-cone PSL-ES with raw UPGrad
+        parts.append("raw")
     return f" ({' + '.join(parts)})" if parts else ""
 
 

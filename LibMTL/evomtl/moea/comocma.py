@@ -1,4 +1,4 @@
-"""COMO-CMA-ES (comocma) ask-and-tell; two objectives only in this build."""
+"""COMO-CMA-ES (comocma) ask-and-tell on the weights ``theta``; two objectives only in this build."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from .common import configure_moea_random_seed, should_run_full_test
+from .common import configure_moea_random_seed, should_run_full_test, theta_box
 from .hv import (
     default_hv_ref_point,
     marginal_hypervolume_weights,
@@ -36,15 +36,15 @@ def run_comocma(
 ) -> Dict[str, Any]:
     """COMO-CMA-ES (comocma) ask-and-tell; **two objectives only**.
 
-    See :func:`run_nsga2` for ``evo_eval_freq``.
+    Every kernel starts at ``theta_0``; see :func:`run_nsga2` for ``lb``, ``ub`` and ``evo_eval_freq``.
     """
     if trainer.task_num != 2:
         raise ValueError(
             "run_comocma() is only supported for two tasks in this build "
             "(see comocma / pycomocma)."
         )
-    if trainer.adapter is None:
-        raise RuntimeError("init_parameter_sharing() first.")
+    if trainer.theta_0 is None:
+        raise RuntimeError("prepare_evolution() first.")
 
     try:
         import comocma
@@ -55,17 +55,11 @@ def run_comocma(
 
     configure_moea_random_seed(seed)
 
-    n_var = int(trainer.adapter.num_dims)
-    z0 = trainer.adapter.z0
-    if hasattr(z0, "tolist"):
-        z0_list = z0.tolist()
-    else:
-        z0_list = list(z0)
-
-    x_starts = [list(z0_list) for _ in range(int(num_kernels))]
+    theta_0 = trainer.theta_0.detach().cpu().double().tolist()
+    x_starts = [list(theta_0) for _ in range(int(num_kernels))]
     inopts = dict(cma_opts or {})
-    lo, hi = float(lb), float(ub)
-    inopts.setdefault("bounds", [[lo] * n_var, [hi] * n_var])
+    xl, xu = theta_box(trainer, lb, ub)
+    inopts.setdefault("bounds", [xl.tolist(), xu.tolist()])
     list_of_solvers = comocma.get_cmas(x_starts, sigma0, inopts=inopts)
 
     if reference_point is None:
@@ -84,7 +78,7 @@ def run_comocma(
         shared_batches = trainer._sample_batches(train_dataloaders, num_batches)
         solution_objectives: List[List[float]] = []
         for x in solutions:
-            trainer.adapt_parameters(x)
+            trainer.set_theta(x)
             L = trainer.evaluate_multiobjective_losses(
                 train_dataloaders, prefetched_batches=shared_batches
             )
@@ -133,7 +127,7 @@ def run_comocma(
             pareto_center_X = pareto_center_from_weights(
                 pareto_set_cut, hv_weights
             )
-            trainer.adapt_parameters(pareto_center_X)
+            trainer.set_theta(pareto_center_X)
             train_batch_metrics = trainer.metrics_snapshot_from_prefetched_batches(
                 shared_batches
             )
@@ -163,7 +157,7 @@ def run_comocma(
                     for i, task in enumerate(trainer.task_name)
                 )
                 print(
-                    f"[EvoMTL] Pareto z TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
+                    f"[EvoMTL] Pareto theta TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
                     flush=True,
                 )
 
@@ -190,7 +184,7 @@ def run_comocma(
         hv_ref_point = default_hv_ref_point(pareto_front_cut)
     pareto_center_X = pareto_center_from_weights(pareto_set_cut, hv_weights)
 
-    trainer.adapt_parameters(pareto_center_X)
+    trainer.set_theta(pareto_center_X)
     out = {
         "method": "COMO-CMA-ES",
         "moes": moes,

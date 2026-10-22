@@ -3,38 +3,43 @@
 MO-OpenES and OpenES search for one network. Here the search distribution is over a
 preference-conditioned family of networks (for two tasks a line in weight space, as in PaMaL):
 
-    theta(lam) = theta_0 + z + S B phi(lam)
+    theta(lam) = theta + S B phi(lam)
 
 * ``lam``: preference on the simplex (``lam_k >= 0``, ``sum_k lam_k = 1``);
 * ``phi(lam) = sqrt(2) Q^T (lam - 1/K)``: its coordinates in the simplex plane (``Q`` is an
   orthonormal basis of ``{v : sum(v) = 0}``); for two tasks ``phi = lam_1 - lam_2`` in ``[-1, 1]``;
+* ``theta``: the weights of the balanced network: at ``lam = 1/K``, ``phi = 0`` and ``theta(lam) = theta``.
+  It starts at the current weights ``theta_0``;
 * ``B``: ``[P, K - 1]`` steering matrix on the ``P`` conditioned parameters (``psl_params``),
-  scattered into the full parameter vector by ``S``;
-* ``z``: shared delta. At the balanced preference ``lam = 1/K``, ``phi = 0`` and ``theta = theta_0 + z``.
+  scattered into the full weight vector by ``S``; it starts at 0, so every preference starts at ``theta_0``.
 
-ES searches ``x = (z, B)``. One generation, with antithetic pairs ``j = 1..N/2``:
+ES searches ``x = (theta, B)``. One generation, with antithetic pairs ``i = 1..N/2``:
 
-1. draw a preference ``lam_j`` (stratified uniform for two tasks, Dirichlet(1) otherwise) and
-   ``eps_j`` over ``x``; both members of a pair use ``lam_j``;
-2. evaluate ``theta(lam_j)`` at ``x +- sigma eps_j`` on the shared mini-batch and score it with its
+1. draw a preference ``lam_i`` (stratified uniform for two tasks, Dirichlet(1) otherwise) and
+   noise ``eps_i ~ N(0, I)`` over ``x``, giving the perturbation ``z_i = sigma eps_i``; both members of a
+   pair use ``lam_i``;
+2. evaluate ``theta(lam_i)`` at ``x +- z_i`` on the shared mini-batch and score it with its
    own preference: Chebyshev ``max_k lam_k l_k`` (``tch``; ideal point 0, since cross-entropy is
    >= 0) or weighted sum ``sum_k lam_k l_k`` (``ws``);
-3. ``d_j = s(x + sigma eps_j) - s(x - sigma eps_j)`` cancels the preference-dependent level of the
+3. ``d_i = s(x + z_i) - s(x - z_i)`` cancels the preference-dependent level of the
    score (ranking raw scores would mostly rank the preferences); the centered ranks of
-   ``{d_j} U {-d_j}`` take the place of OpenES's fitness ranks;
-4. ``g = 2 sum_j r_j eps_j / (N sigma)`` estimates the gradient of ``E_lam[s(theta(lam), lam)]``
+   ``{d_i} U {-d_i}`` take the place of OpenES's fitness ranks;
+4. ``g = 2 sum_i r_i eps_i / (N sigma) = 2 sum_i r_i z_i / (N sigma^2)`` estimates the gradient of ``E_lam[s(theta(lam), lam)]``
    under Gaussian smoothing, and the optimizer steps on ``x``. With ``fitness_shaping="raw"`` the
-   ranks are replaced by ``r_j = d_j / 2``, i.e. the unshaped antithetic estimator
-   ``g = sum_j d_j eps_j / (N sigma)``.
+   ranks are replaced by ``r_i = d_i / 2``, i.e. the unshaped antithetic estimator
+   ``g = sum_i d_i eps_i / (N sigma)``.
 
-Split update (optional; the defaults give the plain estimator above). ``z`` moves every network and
+With ``z_i = (z_theta_i, z_B_i)``, the network of pair ``i`` moves by ``z_theta_i + S z_B_i phi_i`` in
+weight space, so the ``B`` noise has no effect at the balanced preference and full effect at the ends.
+
+Split update (optional; the defaults give the plain estimator above). ``theta`` moves every network and
 is the balanced network, ``B`` sets the spread, and the two can follow different weightings of the
 same pairs:
 
-* ``center_a > 1``: the ``z`` part of ``g`` weights pair ``j`` by ``Dirichlet(a)/Dirichlet(1)`` at
-  ``lam_j`` (for two tasks the ``Beta(a, a)`` density of ``lam_1``), normalised to mean 1, so the
+* ``center_a > 1``: the ``theta`` part of ``g`` weights pair ``i`` by ``Dirichlet(a)/Dirichlet(1)`` at
+  ``lam_i`` (for two tasks the ``Beta(a, a)`` density of ``lam_1``), normalised to mean 1, so the
   balanced network follows the near-balanced preferences instead of networks far along the line;
-* ``spread_score``: the scores ranked for the ``B`` part: ``"same"`` as ``z``; ``"ideal"``, Chebyshev
+* ``spread_score``: the scores ranked for the ``B`` part: ``"same"`` as ``theta``; ``"ideal"``, Chebyshev
   measured from an ideal point (each task's lowest loss in the population on this batch, minus
   ``ideal_margin``) instead of from 0, so an off-centre preference keeps a trade-off with its weaker
   task instead of reducing to one task; or ``"hv"`` (below).
@@ -56,13 +61,13 @@ Task guide (``psl_guide="tasks"``, with Guided ES sampling): the guiding subspac
 losses instead of past updates. Pairs are grouped into regions of the preference simplex (the nearest of the
 centre and of K points near the corners; for two tasks, thirds of ``lam_1``). For each region R and task k,
 the per-task loss differences of the pairs in R are ranked and give a weight-space direction
-``sum_j rho_jk (eps_z,j + S eps_B,j phi_j)``, smoothed over generations with decay ``guided_ema``. Every
-direction is placed in the ``z`` block and in each column of ``B``, giving ``(K + 1) K K`` guide vectors (12
+``sum_i rho_ik (eps_theta_i + S eps_B_i phi_i)``, smoothed over generations with decay ``guided_ema``. Every
+direction is placed in the ``theta`` block and in each column of ``B``, giving ``(K + 1) K K`` guide vectors (12
 for two tasks): the PSL gradient lies almost entirely in the span of the task gradients at a few points of the
 family.
 
 The front is read out by evaluating ``theta(lam)`` on a grid of preferences: ``front.csv`` at
-every test evaluation, ``psl_result.pt`` at the end. The balanced network ``theta_0 + z`` is the
+every test evaluation, ``psl_result.pt`` at the end. The balanced network ``theta`` is the
 returned solution (``pareto_center_X``) and fills the train/test columns of ``metrics.csv``, like
 the ES mean of :func:`~LibMTL.evomtl.moea.mo_openes.run_mo_openes`.
 
@@ -222,7 +227,7 @@ def run_psl_es(
     guided_ema: float = 0.0,
     **_unused: Any,
 ) -> Dict[str, Any]:
-    """PSL-OpenES ask-and-tell on ``x = (z, B)`` (see module docstring).
+    """PSL-OpenES ask-and-tell on ``x = (theta, B)`` (see module docstring).
 
     Parameters
     ----------
@@ -236,17 +241,17 @@ def run_psl_es(
     eval_points : int
         Preferences per simplex edge on which the front is evaluated (11: ``lam_1 = 0, 0.1, ..., 1``).
     center_a : float
-        Concentration of the preference weights in the ``z`` part of the update (``Beta(a, a)`` for two
+        Concentration of the preference weights in the ``theta`` part of the update (``Beta(a, a)`` for two
         tasks); 1 (default) weights all pairs equally.
     spread_score : str
-        Scores ranked for the ``B`` part of the update: ``"same"`` (default, the ranks of ``z``), ``"ideal"``
+        Scores ranked for the ``B`` part of the update: ``"same"`` (default, the ranks of ``theta``), ``"ideal"``
         (Chebyshev from each task's lowest population loss on the batch minus ``ideal_margin``) or ``"hv"``
         (hypervolume score from ``hv_ref_point``).
     rank_groups : int
         Rank the pair differences within this many groups of pairs with neighbouring ``lam_1`` (two tasks)
         instead of across all pairs (1, default).
     fitness_shaping : str
-        ``"raw"`` (default): use the pair differences unranked (``r_j = d_j / 2``, see step 4), the unbiased
+        ``"raw"`` (default): use the pair differences unranked (``r_i = d_i / 2``, see step 4), the unbiased
         estimator; ``"centered_ranks"``: rank them. ``raw`` cannot be combined with ``rank_groups > 1``.
     psl_guide : str
         Guiding subspace of Guided ES sampling (``guided_k > 0``): ``"update"`` (default, a moving average of
@@ -255,14 +260,11 @@ def run_psl_es(
         If given, the test hypervolume of that front is printed and logged (``test_hv``).
 
     The other parameters are those of :func:`~LibMTL.evomtl.moea.mo_openes.run_mo_openes`; Guided ES
-    sampling (``guided_*``) acts on ``x``. Needs ``evo_adapter=full`` and antithetic sampling
-    (both members of a pair share one preference).
+    sampling (``guided_*``) acts on ``x``. Needs antithetic sampling (both members of a pair share one
+    preference).
     """
-    if trainer.adapter is None:
-        raise RuntimeError("init_parameter_sharing() first.")
-    if type(trainer.adapter).__name__ != "FullParameters":
-        raise ValueError("PSL-OpenES conditions model parameters directly and needs evo_adapter=full, "
-                         f"got {type(trainer.adapter).__name__}.")
+    if trainer.theta_0 is None:
+        raise RuntimeError("prepare_evolution() first.")
     scalarization = str(scalarization).strip().lower()
     if scalarization not in SCALARIZATIONS:
         raise ValueError(f"Unknown PSL scalarization {scalarization!r}; options: {SCALARIZATIONS}")
@@ -296,15 +298,15 @@ def run_psl_es(
     configure_moea_random_seed(seed)
     gen = torch.Generator().manual_seed(int(seed))
 
-    D = int(trainer.adapter.num_dims)
+    D = int(trainer.theta_0.numel())
     K = int(trainer.task_num)
     M = pop_size // 2
     idx = conditioned_indices(trainer.model, psl_params)
     P, C = int(idx.numel()), K - 1
     Q = simplex_basis(K)
     n_var = D + P * C
-    x = torch.zeros(n_var, dtype=torch.float32)
-    x[:D] = torch.as_tensor(trainer.adapter.z0, dtype=torch.float32).reshape(-1)  # B starts at 0
+    x = torch.zeros(n_var, dtype=torch.float32)  # x = (theta, B)
+    x[:D] = trainer.theta_0.detach().cpu().float()  # theta starts at theta_0, B at 0
     x.requires_grad_(True)
     optim = str(optim).strip().lower()
     optimizer = make_es_optimizer([x], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps)
@@ -319,17 +321,17 @@ def run_psl_es(
     balanced_phi = torch.zeros(C, dtype=torch.float32)  # phi(1/K) = 0
     ref = None if hv_ref_point is None else np.asarray(hv_ref_point, dtype=np.float64).reshape(K)
 
-    def delta(xv: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
-        """Parameter delta ``z + S B phi`` of the network for preference features ``phi`` (``[C]``)."""
-        d = xv[:D].clone()
-        d.index_add_(0, idx, xv[D:].view(P, C) @ phi)
-        return d
+    def theta_at(xv: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
+        """Weights ``theta + S B phi`` of the network for preference features ``phi`` (``[C]``)."""
+        t = xv[:D].clone()
+        t.index_add_(0, idx, xv[D:].view(P, C) @ phi)
+        return t
 
     def evaluate_front(xv: torch.Tensor, batches: list) -> Dict[str, list]:
         """Metrics of ``theta(lam)`` for every grid preference: current train batch and test set."""
         out: Dict[str, list] = {"train": [], "test": []}
         for g in range(len(grid)):
-            trainer.adapt_parameters(delta(xv, grid_phi[g]))
+            trainer.set_theta(theta_at(xv, grid_phi[g]))
             out["train"].append(trainer.metrics_snapshot_from_prefetched_batches(batches))
             if test_dataloaders is not None:
                 out["test"].append(trainer.test(test_dataloaders, epoch=None, mode="test",
@@ -339,11 +341,11 @@ def run_psl_es(
     print(
         f"[EvoMTL] {method}: dims={n_var} | pop={pop_size} | optim={optim} lr={lr} | sigma={sigma} "
         f"(decay={sigma_decay}, min={sigma_min}) | conditioned params={P} (psl_params={psl_params}), "
-        f"z dims={D}, B dims={P * C} | scalarization={scalarization} | front grid={len(grid)} preferences"
+        f"theta dims={D}, B dims={P * C} | scalarization={scalarization} | front grid={len(grid)} preferences"
         + (f" | guided k={guided_k}, alpha={guided_alpha}, sigma_sub={guided_sigma or 'auto'}, ema={guided_ema}, "
            f"guide={psl_guide}" + (f" ({(K + 1) * K * K} vectors)" if psl_guide == "tasks" else "")
            if guided_k > 0 else "")
-        + (f" | split update: z weights Dirichlet(a={center_a}), B scores={spread_score}"
+        + (f" | split update: theta weights Dirichlet(a={center_a}), B scores={spread_score}"
            + (f" (margin {ideal_margin})" if spread_score == "ideal" else "") if split else "")
         + (f" | ranks within {rank_groups} preference groups" if rank_groups > 1 else "")
         + f" | fitness={fitness_shaping}",
@@ -380,20 +382,21 @@ def run_psl_es(
         step = wandb_step_offset + iteration
         test_metrics = None
 
-        # ask: eps over x, one preference per antithetic pair
+        # ask: noise eps over x and perturbations z = sigma eps, one preference per antithetic pair
         eps = torch.randn(M, n_var, generator=gen, dtype=torch.float32)
         if guided_k > 0 and guide:
             eps = guided_noise(eps, guide, gen, sigma, guided_alpha, guided_sigma)
+        z = sigma * eps
         lam = sample_preferences(M, K, gen)
         phi = preference_features(lam, Q)
 
-        # evaluate every member on the same mini-batch(es): rows j (x + sigma eps_j) and M + j (x - sigma eps_j)
+        # evaluate every member on the same mini-batch(es): rows i (x + z_i) and M + i (x - z_i)
         shared_batches = trainer._sample_batches(train_dataloaders, num_batches)
         xd = x.detach()
-        for j in range(M):
+        for i in range(M):
             for s, sign in enumerate((1.0, -1.0)):
-                trainer.adapt_parameters(delta(xd + sign * sigma * eps[j], phi[j]))
-                F[j + s * M] = trainer.evaluate_multiobjective_losses(
+                trainer.set_theta(theta_at(xd + sign * z[i], phi[i]))
+                F[i + s * M] = trainer.evaluate_multiobjective_losses(
                     train_dataloaders, prefetched_batches=shared_batches
                 )
 
@@ -402,7 +405,7 @@ def run_psl_es(
 
         def pair_ranks(scores: np.ndarray) -> torch.Tensor:
             diff = scores[:M] - scores[M:]
-            if raw:  # unshaped: 2 * (d_j / 2) = d_j in the estimator below
+            if raw:  # unshaped: 2 * (d_i / 2) = d_i in the estimator below
                 return torch.as_tensor(diff / 2.0, dtype=torch.float32)
             if rank_groups <= 1:
                 return torch.as_tensor(centered_ranks(np.concatenate([diff, -diff]))[:M], dtype=torch.float32)
@@ -412,7 +415,7 @@ def run_psl_es(
             return torch.as_tensor(r, dtype=torch.float32)
 
         ranks = pair_ranks(scalarize(F, lam_np, scalarization, ref))
-        if split:  # z: centre-weighted ranks; B: ranks of the scores chosen by spread_score
+        if split:  # theta: centre-weighted ranks; B: ranks of the scores chosen by spread_score
             ranks_b = ranks
             if spread_score == "ideal":
                 ranks_b = pair_ranks(scalarize(F - (F.min(axis=0) - ideal_margin), lam_np, "tch"))
@@ -425,7 +428,7 @@ def run_psl_es(
         x.grad = direction.clone()
         optimizer.step()
         if guided_k > 0 and psl_guide == "tasks":
-            # weight-space perturbation of each pair (eps_z + S eps_B phi_j) and per-task ranks within regions
+            # weight-space noise direction of each pair (eps_theta + S eps_B phi_i) and per-task ranks within regions
             dtheta = eps[:, :D].clone()
             dtheta[:, idx] += (eps[:, D:].view(M, P, C) * phi[:, None, :]).sum(-1)
             regions = guide_regions(lam)
@@ -441,7 +444,7 @@ def run_psl_es(
                     v = v / v.norm().clamp_min(1e-30)
                     old = task_dirs.get((r, k))
                     task_dirs[(r, k)] = v if old is None else guided_ema * old + (1.0 - guided_ema) * v
-            guide = []  # each direction in the z block and in every column of B
+            guide = []  # each direction in the theta block and in every column of B
             for g in task_dirs.values():
                 guide.append(torch.cat([g, torch.zeros(P * C, dtype=torch.float32)]))
                 for c in range(C):
@@ -471,8 +474,8 @@ def run_psl_es(
             "evo/psl/b_norm": b_norm,
         })
 
-        # the balanced network theta_0 + z: snapshot on the current batch (and test periodically)
-        trainer.adapt_parameters(delta(xd, balanced_phi))
+        # the balanced network theta: snapshot on the current batch (and test periodically)
+        trainer.set_theta(theta_at(xd, balanced_phi))
         train_batch_metrics = trainer.metrics_snapshot_from_prefetched_batches(shared_batches)
         run_eval = should_run_full_test(iteration, num_iterations, evo_eval_freq)
         test_hv = None
@@ -501,9 +504,9 @@ def run_psl_es(
                 flush=True,
             )
             if front_writer is not None:
-                for split, ms in front.items():
+                for part, ms in front.items():
                     for g, m in enumerate(ms):
-                        row = {"generation": iteration + 1, "split": split}
+                        row = {"generation": iteration + 1, "split": part}
                         for k, t in enumerate(tasks):
                             row[f"lambda_{t}"] = float(grid[g, k])
                             row[f"loss_{t}"] = float(m["loss_item"][k])
@@ -516,7 +519,7 @@ def run_psl_es(
                 for i, task in enumerate(trainer.task_name)
             )
             print(
-                f"[EvoMTL] Balanced z TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
+                f"[EvoMTL] Balanced theta TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
                 flush=True,
             )
 
@@ -542,13 +545,13 @@ def run_psl_es(
     # final front (the same numbers as the last front.csv rows when evo_eval_freq > 0)
     xd = x.detach()
     front = evaluate_front(xd, shared_batches)
-    grid_X = torch.stack([delta(xd, grid_phi[g]) for g in range(len(grid))]).numpy()
+    grid_X = torch.stack([theta_at(xd, grid_phi[g]) for g in range(len(grid))]).numpy()
     train_F = np.array([m["loss_item"] for m in front["train"]], dtype=np.float64)
     test_F = np.array([m["loss_item"] for m in front["test"]], dtype=np.float64).reshape(-1, K)
     test_acc = np.array([[m["results"][t][0] for t in tasks] for m in front["test"]], dtype=np.float64).reshape(-1, K)
     if getattr(trainer, "save_path", None):
         torch.save({
-            "z": xd[:D].clone(),                    # shared delta: the balanced network is theta_0 + z
+            "theta": xd[:D].clone(),                # weights of the balanced network
             "B": xd[D:].view(P, C).clone(),         # steering matrix on the conditioned parameters
             "index": idx,                           # flat positions of the conditioned parameters
             "Q": Q,                                 # phi(lam) = sqrt(2) Q^T (lam - 1/K)
@@ -557,12 +560,12 @@ def run_psl_es(
             "pop_size": pop_size, "lr": float(lr), "sigma": sigma,
         }, os.path.join(trainer.save_path, "psl_result.pt"))
 
-    center_X = delta(xd, balanced_phi).numpy().copy()
-    trainer.adapt_parameters(center_X)
+    center_X = theta_at(xd, balanced_phi).numpy().copy()
+    trainer.set_theta(center_X)
     out = {
         "method": method,
         "pareto_F": train_F,       # the grid front on the last mini-batch
-        "pareto_X": grid_X,        # parameter deltas of the grid networks
+        "pareto_X": grid_X,        # weights of the grid networks
         "population_F": F,
         "population_X": np.empty((0, D)),
         "hv_weights": None,

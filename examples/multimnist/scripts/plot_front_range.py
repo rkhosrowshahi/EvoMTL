@@ -14,7 +14,7 @@ Writes ``front_range.png`` (and ``.pdf``) to ``--out``; comparisons go to ``figu
 
 Usage (from examples/multimnist)::
 
-    python scripts/plot_front_range.py --psl logs/mnist/psl_guided_es-tch-full/pop_128/adam-lr_1e-3/seed_1-* \\
+    python scripts/plot_front_range.py --psl logs/mnist/psl_guided_es-tch/pop_128/adam-lr_1e-3/seed_1-* \\
         --out figures/comparison/mnist/psl_front_range-pop_128
 """
 

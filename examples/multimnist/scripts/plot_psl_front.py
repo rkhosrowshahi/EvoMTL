@@ -1,6 +1,6 @@
 """Pareto front of PSL-OpenES runs vs the single networks of the other ES methods.
 
-A PSL run (``evo_moea=psl_es``) writes ``front.csv``: the networks ``theta(lam)`` on a grid of
+A PSL run (``evo_moea=psl_es``, ``tpsl_es`` or ``dcpsl_es``) writes ``front.csv``: the networks ``theta(lam)`` on a grid of
 preferences at every test evaluation. The baselines (MO-OpenES, OpenES, Guided ES variants)
 each end with one network, the ES mean; its final test losses come from ``metrics.csv``.
 
@@ -20,8 +20,8 @@ run's folder; comparisons of several PSL runs need ``--out``, by convention
 Usage (from examples/multimnist)::
 
     python scripts/plot_psl_front.py \\
-        --psl logs/mnist/psl_openes-tch-full/pop_128/adam-lr_1e-3/seed_1 \\
-        --baselines logs/mnist/mo_openes-*-full/pop_128/adam-lr_1e-3/seed_1
+        --psl logs/mnist/psl_openes-tch/pop_128/adam-lr_1e-3/seed_1 \\
+        --baselines logs/mnist/mo_openes-*/pop_128/adam-lr_1e-3/seed_1
 
     python scripts/plot_psl_front.py --psl <PSL run 1> <PSL run 2> --out figures/comparison/psl_fronts-pop_128
 """
@@ -112,7 +112,7 @@ def main():
 
     psl = [load_run(d) for d in args.psl]
     base = [load_run(d) for pat in args.baselines for d in sorted(glob.glob(pat))]
-    base = [r for r in base if not r["aggregator"].startswith("psl_")]  # a glob may also catch PSL runs
+    base = [r for r in base if not r["aggregator"].startswith(("psl_", "tpsl_", "dcpsl_"))]  # a glob may also catch PSL runs
     for r in psl:
         r["fronts"] = read_front(r["dir"])
     ref = np.array(args.ref)

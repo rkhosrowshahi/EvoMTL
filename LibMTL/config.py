@@ -118,7 +118,7 @@ _parser.add_argument('--num_experts', nargs='+', help='the number of experts for
 _parser.add_argument('--num_nonzeros', type=int, default=2, help='num_nonzeros for DSelect-k')
 _parser.add_argument('--kgamma', type=float, default=1.0, help='gamma for DSelect-k')
 
-# EvoMTL (MOEA on parameter sharing; use :class:`LibMTL.evomtl.evo_trainer.EvoMTLTrainer`)
+# EvoMTL (MOEA / ES on the network weights theta; use :class:`LibMTL.evomtl.evo_trainer.EvoMTLTrainer`)
 _parser.add_argument('--evo_training', action='store_true', default=False,
                     help='enable EvoMTL; training schedule set by --evo_schedule (default: GD then evolution)')
 _parser.add_argument(
@@ -131,52 +131,25 @@ _parser.add_argument(
          'multi-objective gradient descent, then evolutionary fine-tuning of the Pareto front.',
 )
 _parser.add_argument(
-    '--evo_adapter',
-    type=str,
-    default='spherical_lora',
-    help='EvoMTL parameter-sharing adapter: full (z = delta theta), random_proj, layerwise_random_proj, '
-         'layerwise_scaled_random_proj, flatten_lora, spherical_lora, dict_lora, linear_lora, modulation_lora, spectral_lora, spectral_all_svd',
-)
-_parser.add_argument(
     '--evo_moea',
     type=str,
     default='nsga2',
     help='nsga2, mopso (MOPSO-CD in pymoo), comocma (two tasks only), mo_openes '
-         '(per-objective OpenES pseudo-gradients aggregated by --evo_es_aggregator, Adam on the mean), or psl_es '
+         '(per-objective OpenES pseudo-gradients aggregated by --evo_es_aggregator, Adam on the weights), or psl_es '
          '(Pareto set learning with OpenES: one run learns preference-conditioned networks; uses the --evo_es_* '
-         'and --evo_psl_* flags)',
-)
-_parser.add_argument(
-    '--evo_adapter_alpha',
-    type=float,
-    default=1.0,
-    help='alpha scaling delta_theta in adapter.forward(z, alpha); theta = theta_0 + adapter.forward(z, alpha=evo_adapter_alpha)',
-)
-_parser.add_argument(
-    '--evo_adapter_r',
-    type=int,
-    default=4,
-    help='rank r for LoRA-style adapter (ignored for random_proj and layerwise_random_proj)',
-)
-_parser.add_argument(
-    '--evo_adapter_k',
-    type=int,
-    default=64,
-    help='random_proj (k+1 dims with scale), layerwise_random_proj (k per projected tensor), '
-         'and layerwise_scaled_random_proj (k+1 per projected tensor)',
-)
-_parser.add_argument(
-    '--evo_adapter_seed',
-    type=int,
-    default=42,
-    help='random seed for the parameter-sharing adapter',
+         'and --evo_psl_* flags), or tpsl_es (Tangent PSL-ES: the same family with the steering direction computed '
+         'from the per-task gradient estimates and only its length learned; also uses --evo_tpsl_*), or dcpsl_es '
+         '(Dual-cone PSL-ES: the same family, the balanced network moved by UPGrad and each corner along its '
+         'dual-cone edge; uses --evo_psl_params, --evo_psl_eval_points, --evo_es_* and --evo_dcpsl_*)',
 )
 _parser.add_argument('--evo_iterations', type=int, default=30,
                     help='MOEA outer iterations: NSGA-II / MOPSO-CD generations or COMO-CMA-ES iterations')
 _parser.add_argument('--evo_pop_size', type=int, default=24,
                     help='MOEA population size (NSGA-II; MOPSO-CD; COMO-CMA popsize)')
-_parser.add_argument('--evo_lb', type=float, default=-3.0, help='box lower for latent z (pymoo MOEAs; COMO-CMA bounds)')
-_parser.add_argument('--evo_ub', type=float, default=3.0, help='box upper for latent z (pymoo MOEAs; COMO-CMA bounds)')
+_parser.add_argument('--evo_lb', type=float, default=-3.0,
+                    help='lower offset of the search box theta_0 + [evo_lb, evo_ub] per weight (pymoo MOEAs; COMO-CMA bounds)')
+_parser.add_argument('--evo_ub', type=float, default=3.0,
+                    help='upper offset of the search box theta_0 + [evo_lb, evo_ub] per weight (pymoo MOEAs; COMO-CMA bounds)')
 _parser.add_argument('--evo_num_batches', type=int, default=1,
                     help='train batches per MOEA fitness evaluation')
 _parser.add_argument(
@@ -326,10 +299,11 @@ _parser.add_argument('--evo_psl_scalarization', type=str, default='tch', choices
                          'ws = weighted sum sum_k lam_k l_k, hv = Chebyshev distance inside the box of '
                          '--evo_hv_ref_point along the preference direction (hypervolume score, two tasks)')
 _parser.add_argument('--evo_psl_center_a', type=float, default=1.0,
-                    help='PSL-OpenES: in the update of the shared delta z (the balanced network), weight each pair by the '
+                    help='PSL-OpenES: in the update of theta (the balanced network), weight each pair by the '
                          'Beta(a, a) density of its preference lam_1 (Dirichlet(a) for more tasks); 1 = equal weights')
 _parser.add_argument('--evo_psl_spread_score', type=str, default='same', choices=('same', 'ideal', 'hv'),
-                    help='PSL-OpenES: scores ranked for the update of the steering matrix B: same (the ranks of z), '
+                    help='PSL-OpenES: scores ranked for the update of the steering matrix B (its length c for tpsl_es): '
+                         'same (the ranks of theta), '
                          'ideal (Chebyshev from each task\'s lowest loss in the population minus '
                          '--evo_psl_ideal_margin) or hv (hypervolume score from --evo_hv_ref_point)')
 _parser.add_argument('--evo_psl_ideal_margin', type=float, default=0.1,
@@ -341,6 +315,23 @@ _parser.add_argument('--evo_psl_guide', type=str, default='update', choices=('up
 _parser.add_argument('--evo_psl_rank_groups', type=int, default=1,
                     help='PSL-OpenES: rank the pair differences within this many groups of neighbouring preferences '
                          'instead of across all pairs (1); use > 1 with the hv score')
+_parser.add_argument('--evo_tpsl_c0', type=float, default=0.1,
+                    help='Tangent PSL-ES (evo_moea=tpsl_es): initial length c of the line theta +- c T, the distance of '
+                         'the end preferences from theta')
+_parser.add_argument('--evo_tpsl_c_lr', type=float, default=0.05,
+                    help='Tangent PSL-ES: Adam learning rate on log c; 0 keeps c fixed at --evo_tpsl_c0')
+_parser.add_argument('--evo_tpsl_grad_ema', type=float, default=0.9,
+                    help='Tangent PSL-ES: decay of the moving averages of the per-task gradient estimates that give '
+                         'the tangent direction T (and of the region losses compared by the brake)')
+_parser.add_argument('--evo_tpsl_brake', action=argparse.BooleanOptionalAction, default=True,
+                    help='Tangent PSL-ES: shrink c while the points of the line near a corner are worse on every task '
+                         'than those near the centre (the line runs past the front); --no-evo_tpsl_brake to disable')
+_parser.add_argument('--evo_dcpsl_center_fraction', type=float, default=0.5,
+                    help='Dual-cone PSL-ES (evo_moea=dcpsl_es): fraction of the antithetic pairs evaluated at the '
+                         'balanced network; the rest are split equally between the corners of the front')
+_parser.add_argument('--evo_dcpsl_normalize', action=argparse.BooleanOptionalAction, default=True,
+                    help='Dual-cone PSL-ES: scale the gradient estimate of each objective to unit length before the dual-cone '
+                         'projections, so the objectives weigh equally (--no-evo_dcpsl_normalize: raw UPGrad)')
 _parser.add_argument('--evo_psl_eval_points', type=int, default=11,
                     help='PSL-OpenES: preferences per simplex edge on which the front is evaluated '
                          '(11: lam_1 = 0, 0.1, ..., 1)')
@@ -620,20 +611,6 @@ def _make_evo_args(params):
         return {'evo_training': False}
 
     moea = params.evo_moea.strip().lower()
-    adapter_key = params.evo_adapter.strip().lower().replace('-', '_')
-
-    adapter_kwargs = {'seed': params.evo_adapter_seed}
-    if adapter_key == 'full':
-        pass
-    elif adapter_key in (
-        'random_proj',
-        'layerwise_random_proj',
-        'layerwise_random_blocking',
-        'layerwise_scaled_random_proj',
-    ):
-        adapter_kwargs['k'] = params.evo_adapter_k
-    else:
-        adapter_kwargs['r'] = params.evo_adapter_r
 
     hv_agg = getattr(params, 'evo_hv_center_aggregation', 'linear')
     hv_temp = float(getattr(params, 'evo_hv_softmax_temperature', 1.0))
@@ -732,7 +709,39 @@ def _make_evo_args(params):
             'upgrad_norm_eps': float(params.upgrad_norm_eps),
             'upgrad_reg_eps': float(params.upgrad_reg_eps),
         }
-    elif moea in ('psl_es', 'psl-es'):
+    elif moea in ('dcpsl_es', 'dcpsl-es'):
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'lr': float(params.evo_es_lr),
+            'sigma': float(params.evo_es_sigma),
+            'sigma_decay': float(params.evo_es_sigma_decay),
+            'sigma_min': float(params.evo_es_sigma_min),
+            'psl_params': str(params.evo_psl_params),
+            'eval_points': int(params.evo_psl_eval_points),
+            'center_fraction': float(params.evo_dcpsl_center_fraction),
+            'normalize': bool(params.evo_dcpsl_normalize),
+            'fitness_shaping': str(params.evo_es_fitness_shaping).strip().lower(),
+            'antithetic': bool(params.evo_es_antithetic),
+            'optim': str(params.evo_es_optim),
+            'adam_betas': (float(params.evo_es_adam_beta1), float(params.evo_es_adam_beta2)),
+            'adam_eps': float(params.evo_es_adam_eps),
+            'rmsprop_alpha': float(params.evo_es_rmsprop_alpha),
+            'rmsprop_eps': float(params.evo_es_rmsprop_eps),
+            'upgrad_norm_eps': float(params.upgrad_norm_eps),
+            'upgrad_reg_eps': float(params.upgrad_reg_eps),
+            'guided_k': int(params.evo_es_guided_k),
+            'guided_alpha': float(params.evo_es_guided_alpha),
+            'guided_sigma': float(params.evo_es_guided_sigma),
+            'guided_ema': float(params.evo_es_guided_ema),
+        }
+        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
+            evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
+    elif moea in ('psl_es', 'psl-es', 'tpsl_es', 'tpsl-es'):
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
             'pop_size': params.evo_pop_size,
@@ -763,6 +772,11 @@ def _make_evo_args(params):
             'guided_sigma': float(params.evo_es_guided_sigma),
             'guided_ema': float(params.evo_es_guided_ema),
         }
+        if moea.startswith('tpsl'):  # Tangent PSL-ES: the line length c and the tangent's moving averages
+            evo_kwargs['c0'] = float(params.evo_tpsl_c0)
+            evo_kwargs['c_lr'] = float(params.evo_tpsl_c_lr)
+            evo_kwargs['grad_ema'] = float(params.evo_tpsl_grad_ema)
+            evo_kwargs['brake'] = bool(params.evo_tpsl_brake)
         hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
         if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
             evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
@@ -772,10 +786,7 @@ def _make_evo_args(params):
     return {
         'evo_training': True,
         'evo_schedule': getattr(params, 'evo_schedule', 'gd_then_evolution'),
-        'evo_adapter': params.evo_adapter,
         'moea': params.evo_moea,
-        'adapter_alpha': params.evo_adapter_alpha,
-        'adapter_kwargs': adapter_kwargs,
         'evo_kwargs': evo_kwargs,
     }
 
@@ -816,11 +827,9 @@ def _display(params, kwargs, optim_param, scheduler_param):
     evo = kwargs.get('evo_args') or {}
     if evo.get('evo_training'):
         print('EvoMTL Configuration:')
-        for k in ('evo_schedule', 'evo_adapter', 'moea', 'adapter_alpha'):
+        for k in ('evo_schedule', 'moea'):
             if k in evo:
                 print('\t'+k+':', evo[k])
         print('\t(save_path for GD + EvoMTL):', params.save_path)
-        if evo.get('adapter_kwargs'):
-            print('\tadapter_kwargs:', evo['adapter_kwargs'])
         if evo.get('evo_kwargs'):
             print('\tevo_kwargs:', evo['evo_kwargs'])

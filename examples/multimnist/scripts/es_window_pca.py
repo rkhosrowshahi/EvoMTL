@@ -11,7 +11,7 @@
 
 Usage (from examples/multimnist)::
 
-    uv run python scripts/es_window_pca.py logs/mnist/window_cos/guided_es-ws-full/pop_128/seed_1/vectors.npz
+    uv run python scripts/es_window_pca.py logs/mnist/window_cos/guided_es-ws/pop_128/seed_1/vectors.npz
 """
 
 import argparse

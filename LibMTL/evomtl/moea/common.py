@@ -1,10 +1,18 @@
-"""Shared MOEA loop utilities (population injection, test cadence)."""
+"""Shared MOEA loop utilities (search box, population injection, test cadence)."""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import numpy as np
+
+
+def theta_box(trainer: Any, lb: float, ub: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Box ``theta_0 + [lb, ub]`` (per weight) searched by the bounded MOEAs (NSGA-II, MOPSO-CD, COMO-CMA)."""
+    if trainer.theta_0 is None:
+        raise RuntimeError("prepare_evolution() first.")
+    theta_0 = trainer.theta_0.detach().cpu().double().numpy()
+    return theta_0 + float(lb), theta_0 + float(ub)
 
 
 def configure_moea_random_seed(seed: int) -> None:

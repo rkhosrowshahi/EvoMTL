@@ -25,9 +25,9 @@ Writes to ``--out``: ``window_cos.csv`` (mean and quartiles per T, all windows a
 
 Usage (from examples/multimnist; extra flags go to main.py and override the YAML)::
 
-    uv run python scripts/es_window_cosine.py --config configs/10epochs/mnist/evomtl/guided_es-ws-full/pop_128/adam-lr_0.001/seed1_s0.05_a0.9_ema0.9.yaml
-    uv run python scripts/es_window_cosine.py --config <same> --evo_pop_size 2048 --out logs/mnist/window_cos/guided_es-ws-full/pop_2048
-    uv run python scripts/es_window_cosine.py --analyze logs/mnist/window_cos/guided_es-ws-full/pop_128/vectors.npz
+    uv run python scripts/es_window_cosine.py --config configs/10epochs/mnist/evomtl/guided_es-ws/pop_128/adam-lr_0.001/seed1_s0.05_a0.9_ema0.9.yaml
+    uv run python scripts/es_window_cosine.py --config <same> --evo_pop_size 2048 --out logs/mnist/window_cos/guided_es-ws/pop_2048
+    uv run python scripts/es_window_cosine.py --analyze logs/mnist/window_cos/guided_es-ws/pop_128/vectors.npz
 """
 
 import argparse
@@ -67,8 +67,8 @@ def run_and_record(cfg_path, out, forward):
 
     orig_true_jacobian, orig_make_opt = es.true_jacobian, es.make_es_optimizer
 
-    def true_jacobian(trainer, z, batches):
-        J = orig_true_jacobian(trainer, z, batches)
+    def true_jacobian(trainer, theta, batches):
+        J = orig_true_jacobian(trainer, theta, batches)
         rec["J_true"] = J
         return J
 

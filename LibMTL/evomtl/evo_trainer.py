@@ -1,22 +1,22 @@
-"""Evolutionary multi-objective training on low-dimensional parameter-sharing codes.
+"""Evolutionary multi-objective training of the network weights ``theta``.
+
+Every algorithm searches the flat weight vector ``theta`` directly (order of ``model.parameters()``),
+starting from the current weights ``theta_0``.
 
 Two schedules (``evo_schedule``):
 
 * ``evolution`` (:meth:`EvoMTLTrainer.evolve`): multi-objective evolutionary training from the
   initial weights, steps 2–4 below. Either a Pareto front (NSGA-II, MOPSO-CD, COMO-CMA,
-  PSL-ES) or a single Pareto-stationary network (MO-OpenES with Jacobian aggregation, e.g. UPGrad).
+  PSL-ES, Tangent PSL-ES, Dual-cone PSL-ES) or a single Pareto-stationary network (MO-OpenES with Jacobian aggregation, e.g. UPGrad).
 * ``gd_then_evolution`` (:meth:`EvoMTLTrainer.train_then_evolve`, default): multi-objective
   gradient descent (step 1), then the same evolutionary training as fine-tuning that shapes the
   Pareto front.
 
 1. Gradient descent with the configured weighting (:meth:`Trainer.train`), ``gd_then_evolution`` only.
-2. Snapshot ``theta_0`` and build a parameter-sharing ``adapter`` so that
-   ``theta = theta_0 + adapter.forward(z, alpha=evo_adapter_alpha)`` (``alpha`` scales ``delta_theta``
-   inside :meth:`~LibMTL.evomtl.parameter_sharing` ``process``; config ``evo_adapter_alpha``
-   maps to :attr:`adapter_alpha` on the trainer).
+2. Snapshot the starting weights ``theta_0``.
 3. Run NSGA-II, stochastic NSGA-II (SNSGA-II), MOPSO-CD (pymoo), COMO-CMA-ES / MO-CMA-ES (comocma),
    or MO-OpenES (per-objective OpenES pseudo-gradients aggregated with UPGrad) with an ask-and-tell loop.
-4. Form a *Pareto-center* latent vector by averaging Pareto-set points weighted by
+4. Form a *Pareto-center* weight vector by averaging Pareto-set points weighted by
    marginal hypervolume contribution, apply it, then evaluate train and test (same
    path as :meth:`Trainer.test`) and save.
 
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -42,47 +42,6 @@ import matplotlib.pyplot as plt
 import wandb
 
 from ..trainer import Trainer
-from .parameter_sharing import (
-    DictLoRA,
-    FlattenLoRA,
-    FullParameters,
-    LayerwiseRandomBlocking,
-    LayerwiseRandomProjection,
-    LayerwiseScaledRandomProjection,
-    LinearOnlyLoRA,
-    ModulationLoRA,
-    RandomProjection,
-    SpectralAllSVD,
-    SpectralLoRA,
-    adapt_parameters,
-)
-
-EVO_PS_REGISTRY = {
-    "full": FullParameters,
-    "random_proj": RandomProjection,
-    "layerwise_random_proj": LayerwiseRandomProjection,
-    "layerwise_random_blocking": LayerwiseRandomBlocking,
-    "layerwise_scaled_random_proj": LayerwiseScaledRandomProjection,
-    "flatten_lora": FlattenLoRA,
-    "spherical_lora": FlattenLoRA,
-    "dict_lora": DictLoRA,
-    "linear_lora": LinearOnlyLoRA,
-    "modulation_lora": ModulationLoRA,
-    "spectral_lora": SpectralLoRA,
-    "spectral_all_svd": SpectralAllSVD,
-}
-
-
-def resolve_adapter_class(name: str) -> Type[Any]:
-    """Map :mod:`LibMTL.config` ``--evo_adapter`` string to a parameter-sharing adapter class."""
-    key = name.strip().lower().replace("-", "_")
-    if key not in EVO_PS_REGISTRY:
-        raise ValueError(
-            f"Unknown evo_adapter {name!r}. Options: {sorted(EVO_PS_REGISTRY)}"
-        )
-    return EVO_PS_REGISTRY[key]
-
-
 from .moea.comocma import run_comocma
 from .moea.hv import (
     marginal_hypervolume_weights,
@@ -94,34 +53,32 @@ from .moea.hv import (
 from .moea.mo_openes import run_mo_openes
 from .moea.mopso import run_mopso
 from .moea.psl_es import run_psl_es
+from .moea.tpsl_es import run_tpsl_es
+from .moea.dcpsl_es import run_dcpsl_es
 from .moea.nsga2 import run_nsga2
 
 MO_OPENES_KEYS = ("mo_openes", "mo-openes", "openes")
 PSL_ES_KEYS = ("psl_es", "psl-es")
+TPSL_ES_KEYS = ("tpsl_es", "tpsl-es")
+DCPSL_ES_KEYS = ("dcpsl_es", "dcpsl-es")
 
 
 class EvoMTLTrainer(Trainer):
-    """Trainer with MOEA phases on parameter-sharing latent vectors ``z``.
+    """Trainer with MOEA phases on the network weights ``theta``.
 
-    After GD warmup, call :meth:`init_parameter_sharing` (or rely on it from
-    :meth:`prepare_evolution`) then MOEA runners in :mod:`LibMTL.evomtl.moea` (e.g.
-    :func:`~LibMTL.evomtl.moea.nsga2.run_nsga2`).
+    After GD warmup, call :meth:`prepare_evolution` (snapshots ``theta_0``) then MOEA runners in
+    :mod:`LibMTL.evomtl.moea` (e.g. :func:`~LibMTL.evomtl.moea.nsga2.run_nsga2`), which install
+    candidate weights with :meth:`set_theta`.
 
     Notes
     -----
     * ``comocma`` is only used for **two** objectives in upstream tests; this
       class raises if ``task_num != 2`` for :func:`~LibMTL.evomtl.moea.comocma.run_comocma`.
-    * ``SpectralLoRA`` uses SVD modulation on conv weights and LoRA on linear
-      weights; ``SpectralAllSVD`` uses SVD on both conv and linear 2D weights.
-      There is no separate ``SphericalLoRA`` class — use ``FlattenLoRA``
-      (``spherical_lora``) or another strategy from ``LibMTL.evomtl.parameter_sharing``.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.theta_0: Optional[torch.Tensor] = None
-        self.adapter: Any = None
-        self.adapter_alpha: float = 1.0
         self.last_evo: Dict[str, Any] = {}
 
     def train(
@@ -149,11 +106,8 @@ class EvoMTLTrainer(Trainer):
                                  return_weight, finish_wandb=finish_wandb, **kwargs)
         schedule = evo_args.get("evo_schedule", "gd_then_evolution")
         evo = dict(
-            adapter_class=resolve_adapter_class(evo_args["evo_adapter"]),
             moea=evo_args["moea"],
             evo_kwargs=dict(evo_args["evo_kwargs"]),
-            adapter_kwargs=dict(evo_args["adapter_kwargs"]),
-            adapter_alpha=evo_args["adapter_alpha"],
             finish_wandb=finish_wandb,
         )
         if schedule == "evolution":
@@ -166,97 +120,19 @@ class EvoMTLTrainer(Trainer):
                                           val_dataloaders=val_dataloaders, **evo)
         raise ValueError(f"Unknown evo_schedule {schedule!r}; options: evolution, gd_then_evolution")
 
-    def capture_base_parameters(self) -> None:
-        """Store ``theta_0`` as a flat vector on the trainer device."""
+    def prepare_evolution(self) -> None:
+        """Store the current weights as ``theta_0`` (flat vector on the trainer device), the starting point
+        of the search; print the number of weights and add it to the W&B run config if enabled."""
         self.theta_0 = nn.utils.parameters_to_vector(self.model.parameters()).detach().clone()
-
-    def init_parameter_sharing(
-        self,
-        adapter_class: Type[Any],
-        adapter_alpha: float = 1.0,
-        capture_if_needed: bool = True,
-        **adapter_kwargs: Any,
-    ) -> None:
-        """Instantiate parameter-sharing ``adapter`` on the current model.
-
-        If ``theta_0`` was never captured and ``capture_if_needed`` is True,
-        the current weights are stored as ``theta_0`` first.
-        """
-        if self.theta_0 is None and capture_if_needed:
-            self.capture_base_parameters()
-        adapter_kwargs = dict(adapter_kwargs)
-        adapter_kwargs.setdefault("device", str(self.device))
-        self.adapter = adapter_class(self.model, **adapter_kwargs)
-        self.adapter_alpha = float(adapter_alpha)
-
-    def _print_and_log_moea_adapter_stats(self) -> None:
-        """Print model size and MOEA latent dimensionality; add to W&B run config if enabled."""
-        if self.adapter is None:
-            return
-        num_parameters = int(sum(p.numel() for p in self.model.parameters()))
-        num_dimensions = int(self.adapter.num_dims)
-        print(
-            f"[EvoMTL] MOEA (parameter sharing): num_parameters={num_parameters} | "
-            f"num_dimensions={num_dimensions}",
-            flush=True,
-        )
+        num_parameters = int(self.theta_0.numel())
+        print(f"[EvoMTL] MOEA on the weights theta: num_parameters={num_parameters}", flush=True)
         if getattr(self, "_wandb_enabled", False):
-            wandb.config.update(
-                {
-                    "evo_num_parameters": num_parameters,
-                    "evo_num_dimensions": num_dimensions,
-                },
-                allow_val_change=True,
-            )
+            wandb.config.update({"evo_num_parameters": num_parameters}, allow_val_change=True)
 
-    def prepare_evolution(
-        self,
-        adapter_class: Type[Any],
-        adapter_alpha: float = 1.0,
-        **adapter_kwargs: Any,
-    ) -> None:
-        """Capture ``theta_0`` (if missing) and build ``adapter``."""
-        self.init_parameter_sharing(
-            adapter_class, adapter_alpha=adapter_alpha, **adapter_kwargs
-        )
-        self._print_and_log_moea_adapter_stats()
-
-    def adapt_parameters(
-        self,
-        z: Union[np.ndarray, List[float], torch.Tensor],
-        alpha_override: Optional[float] = None,
-    ) -> None:
-        """Set weights to ``theta_0 + phi(z)`` where ``phi`` is ``adapter.forward`` (expand + ``process``).
-
-        Delegates to :func:`~LibMTL.evomtl.parameter_sharing.adapt_parameters`.
-        ``alpha_override`` (else :attr:`adapter_alpha` / config ``evo_adapter_alpha``) scales the map inside each strategy's ``process``.
-        """
-        if self.theta_0 is None:
-            raise RuntimeError(
-                "Call capture_base_parameters() before adapt_parameters()."
-            )
-        if self.adapter is None:
-            raise RuntimeError(
-                "Call init_parameter_sharing() before adapt_parameters()."
-            )
-        alpha = (
-            self.adapter_alpha
-            if alpha_override is None
-            else float(alpha_override)
-        )
-        adapt_parameters(
-            self.model,
-            self.theta_0,
-            self.adapter,
-            z,
-            alpha=alpha,
-            device=self.device,
-        )
-
-    def restore_base_parameters(self) -> None:
-        if self.theta_0 is None:
-            raise RuntimeError("No base snapshot; run capture_base_parameters() first.")
-        nn.utils.vector_to_parameters(self.theta_0, self.model.parameters())
+    def set_theta(self, theta: Union[np.ndarray, torch.Tensor]) -> None:
+        """Install the flat weight vector ``theta`` (order of ``model.parameters()``) into the model."""
+        theta = torch.as_tensor(theta, dtype=torch.float32).reshape(-1).to(self.device)
+        nn.utils.vector_to_parameters(theta, self.model.parameters())
 
     def _sample_batches(
         self,
@@ -580,24 +456,26 @@ class EvoMTLTrainer(Trainer):
         )
 
         if offspring_X is not None:
+            # displacement of the offspring weights from theta_0
             X = np.atleast_2d(np.asarray(offspring_X, dtype=np.float64))
             if X.size:
-                z_min = float(np.min(X))
-                z_max = float(np.max(X))
-                z_mean = float(np.mean(X))
-                z_norm = float(np.linalg.norm(X))
+                X = X - self.theta_0.detach().cpu().double().numpy()
+                d_min = float(np.min(X))
+                d_max = float(np.max(X))
+                d_mean = float(np.mean(X))
+                d_norm = float(np.linalg.norm(X))
                 line += (
-                    f" | offspring z min={z_min:.6f} max={z_max:.6f} "
-                    f"mean={z_mean:.6f} norm={z_norm:.6f}"
+                    f" | offspring theta-theta_0 min={d_min:.6f} max={d_max:.6f} "
+                    f"mean={d_mean:.6f} norm={d_norm:.6f}"
                 )
                 if getattr(self, "_wandb_enabled", False) and wandb_log_step is not None:
                     prefix = f"evo/offspring"
                     self._wandb_log(
                         {
-                            f"{prefix}/min": z_min,
-                            f"{prefix}/max": z_max,
-                            f"{prefix}/mean": z_mean,
-                            f"{prefix}/norm": z_norm,
+                            f"{prefix}/min": d_min,
+                            f"{prefix}/max": d_max,
+                            f"{prefix}/mean": d_mean,
+                            f"{prefix}/norm": d_norm,
                         },
                         step=wandb_log_step,
                     )
@@ -661,6 +539,10 @@ class EvoMTLTrainer(Trainer):
             runner = run_mo_openes
         elif moea_key in PSL_ES_KEYS:
             runner = run_psl_es
+        elif moea_key in TPSL_ES_KEYS:
+            runner = run_tpsl_es
+        elif moea_key in DCPSL_ES_KEYS:
+            runner = run_dcpsl_es
         else:
             raise ValueError(f"Unknown moea backend: {moea_key}")
         return runner(
@@ -671,24 +553,20 @@ class EvoMTLTrainer(Trainer):
         self,
         train_dataloaders: Any,
         test_dataloaders: Any,
-        adapter_class: Type[Any],
         moea: str = "nsga2",
         evo_kwargs: Optional[Dict[str, Any]] = None,
-        adapter_kwargs: Optional[Dict[str, Any]] = None,
-        adapter_alpha: float = 1.0,
         finish_wandb: bool = True,
     ) -> Dict[str, Any]:
         """Multi-objective evolutionary training from the initial weights (schedule ``evolution``).
 
-        Covers Pareto-front methods (NSGA-II, MOPSO, COMO-CMA, PSL-ES) and single-network ES with
-        Jacobian aggregation (MO-OpenES / UPGrad). The network ends at
-        ``theta_0 + adapter.forward(pareto_center_X, ...)``; see :meth:`_evolution_phase` for the
-        evaluation and checkpoints.
+        Covers Pareto-front methods (NSGA-II, MOPSO, COMO-CMA, PSL-ES, Tangent PSL-ES, Dual-cone PSL-ES) and single-network ES with
+        Jacobian aggregation (MO-OpenES / UPGrad). The network ends at the weights
+        ``pareto_center_X``; see :meth:`_evolution_phase` for the evaluation and checkpoints.
         """
         moea_key = moea.lower()
         print(f"[EvoMTL] Evolutionary training: {moea_key} from the initial weights.", flush=True)
-        evo_out = self._evolution_phase(train_dataloaders, test_dataloaders, adapter_class, moea_key, evo_kwargs,
-                                        adapter_kwargs, adapter_alpha, wandb_step_offset=1, schedule="evolution")
+        evo_out = self._evolution_phase(train_dataloaders, test_dataloaders, moea_key, evo_kwargs,
+                                        wandb_step_offset=1, schedule="evolution")
         self._wandb_finish_if(finish_wandb)
         return evo_out
 
@@ -697,11 +575,8 @@ class EvoMTLTrainer(Trainer):
         train_dataloaders: Any,
         test_dataloaders: Any,
         gd_epochs: int,
-        adapter_class: Type[Any],
         moea: str = "nsga2",
         evo_kwargs: Optional[Dict[str, Any]] = None,
-        adapter_kwargs: Optional[Dict[str, Any]] = None,
-        adapter_alpha: float = 1.0,
         val_dataloaders: Any = None,
         finish_wandb: bool = True,
     ) -> Dict[str, Any]:
@@ -715,7 +590,7 @@ class EvoMTLTrainer(Trainer):
         Parameters
         ----------
         moea : str
-            ``"nsga2"``, ``"mopso"`` / ``"mopso_cd"``, ``"comocma"``, ``"mo_openes"`` or ``"psl_es"``.
+            ``"nsga2"``, ``"mopso"`` / ``"mopso_cd"``, ``"comocma"``, ``"mo_openes"``, ``"psl_es"``, ``"tpsl_es"`` or ``"dcpsl_es"``.
         evo_kwargs : dict
             Passed to the runner of ``moea`` in :mod:`LibMTL.evomtl.moea` (first arg is this trainer).
         """
@@ -728,9 +603,8 @@ class EvoMTLTrainer(Trainer):
         print(f"[EvoMTL] Switching from gradient descent ({gd_epochs} epoch(s){w_part}) to evolutionary "
               f"fine-tuning: {moea_key}.", flush=True)
         # After GD, the last wandb step is ``gd_epochs`` (1-based epochs); evolution starts at ``gd_epochs + 1``.
-        evo_out = self._evolution_phase(train_dataloaders, test_dataloaders, adapter_class, moea_key, evo_kwargs,
-                                        adapter_kwargs, adapter_alpha, wandb_step_offset=int(gd_epochs) + 1,
-                                        schedule="gd_then_evolution")
+        evo_out = self._evolution_phase(train_dataloaders, test_dataloaders, moea_key, evo_kwargs,
+                                        wandb_step_offset=int(gd_epochs) + 1, schedule="gd_then_evolution")
         self._wandb_finish_if(finish_wandb)
         return evo_out
 
@@ -738,34 +612,30 @@ class EvoMTLTrainer(Trainer):
         self,
         train_dataloaders: Any,
         test_dataloaders: Any,
-        adapter_class: Type[Any],
         moea_key: str,
         evo_kwargs: Optional[Dict[str, Any]],
-        adapter_kwargs: Optional[Dict[str, Any]],
-        adapter_alpha: float,
         wandb_step_offset: int,
         schedule: str,
     ) -> Dict[str, Any]:
         """Evolutionary phase of both schedules, from the current weights.
 
-        Snapshot ``theta_0`` and build the parameter-sharing adapter, run the MOEA / ES (wandb steps
-        from ``wandb_step_offset``), apply the Pareto-center weights, evaluate them on train (one
-        random minibatch) and test, and write ``evo_result.pt`` and ``model_evo.pt`` under
-        :attr:`Trainer.save_path`.
+        Snapshot ``theta_0``, run the MOEA / ES (wandb steps from ``wandb_step_offset``), apply the
+        Pareto-center weights, evaluate them on train (one random minibatch) and test, and write
+        ``evo_result.pt`` and ``model_evo.pt`` under :attr:`Trainer.save_path`.
         """
         evo_kwargs = dict(evo_kwargs or {})
-        adapter_kwargs = dict(adapter_kwargs or {})
 
-        self.prepare_evolution(adapter_class, adapter_alpha=adapter_alpha, **adapter_kwargs)
+        self.prepare_evolution()
 
         evo_kwargs.setdefault("wandb_step_offset", int(wandb_step_offset))
         post_evo_step = int(evo_kwargs["wandb_step_offset"]) + max(0, int(evo_kwargs.get("num_iterations", 0)))
 
         evo_out = self._run_moea(moea_key, train_dataloaders, test_dataloaders, evo_kwargs)
 
-        if getattr(self, "_wandb_enabled", False):
-            zc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1)
-            self._wandb_log({"evo/final_pareto_center_X_l2": float(np.linalg.norm(zc))}, step=post_evo_step)
+        if getattr(self, "_wandb_enabled", False):  # distance of the returned weights from theta_0
+            dc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1) \
+                - self.theta_0.detach().cpu().double().numpy()
+            self._wandb_log({"evo/final_pareto_center_X_l2": float(np.linalg.norm(dc))}, step=post_evo_step)
 
         # Pareto-center weights are already applied by the runners. COMO-CMA prints ref-cut Pareto
         # stats each iteration; the others only here.
@@ -796,6 +666,7 @@ class EvoMTLTrainer(Trainer):
             torch.save(
                 {
                     "theta_0": self.theta_0,
+                    "search_space": "theta",  # X entries are weights (runs before it was set: theta - theta_0)
                     "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"], dtype=torch.float32),
                     "pareto_F": evo_out["pareto_F"],
                     "pareto_X": evo_out["pareto_X"],

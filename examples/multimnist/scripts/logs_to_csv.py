@@ -28,7 +28,7 @@ EPOCH_RE = re.compile(
     r"^Epoch: (\d+) \| TRAIN: ([\d.]+) ([\d.]+) \| ([\d.]+) ([\d.]+) \| Time: [\d.]+ \| "
     r"TEST: ([\d.]+) ([\d.]+) \| ([\d.]+) ([\d.]+) \|"
 )
-MEAN_RE = re.compile(r"^\[EvoMTL\] Mean z TRAIN \(curr batch\) iteration (\d+) \| (.+)$")
+MEAN_RE = re.compile(r"^\[EvoMTL\] Mean (?:z|theta) TRAIN \(curr batch\) iteration (\d+) \| (.+)$")
 TASKS_RE = re.compile(r"LOG FORMAT \| (\S+)_LOSS Acc \| (\S+)_LOSS Acc")
 
 

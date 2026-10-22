@@ -1,15 +1,18 @@
 """Multi-objective OpenAI-ES with Jacobian aggregation (MO-OpenES).
 
+The search distribution is over the network weights: member ``i`` is ``theta + z_i`` around the search mean ``theta``,
+with perturbation ``z_i = sigma * eps_i`` and standard-normal noise ``eps_i ~ N(0, I)``.
+
 OpenES (Salimans et al. 2017; evosax ``Open_ES``) ranks a population by one scalar
 fitness and estimates a search gradient from the centered ranks. Scalarizing several
 losses into one fitness does not guarantee Pareto-stationary progress, so here every
 objective is ranked **separately**, which yields one pseudo-gradient per objective,
-i.e. a Jacobian ``J`` of shape ``[K, d]``:
+i.e. a Jacobian ``J`` of shape ``[K, D]``:
 
-    g_k = shaped_k @ eps / (N * sigma),   shaped_k = centered_rank(F[:, k])
+    g_k = shaped_k @ eps / (N * sigma) = shaped_k @ z / (N * sigma**2),   shaped_k = centered_rank(F[:, k])
 
 (the same estimator as evosax ``Open_ES._tell`` with ``centered_rank_fitness_shaping_fn``).
-``J`` is aggregated into one common direction and the mean is updated with Adam:
+``J`` is aggregated into one common direction and ``theta`` is updated with Adam:
 
 * ``upgrad``: project every row ``g_k`` onto the dual cone of the rows of ``J`` and
   average the projections (UPGrad, Quinton & Rey 2024). The result never conflicts
@@ -18,18 +21,18 @@ i.e. a Jacobian ``J`` of shape ``[K, d]``:
 * ``ws``: standard OpenES on the equal-weight sum of losses (scalarized baseline).
 
 Per-parameter step sizes (``sigma_adapt``): OpenES samples isotropically with one ``sigma``. With
-``snes`` or ``pgpe`` every coordinate has its own ``sigma_i`` (samples ``mean + sigma * s``,
-``s ~ N(0, I)``), the mean gradient divides by ``sigma_i`` per coordinate, and after each update
+``snes`` or ``pgpe`` every coordinate has its own ``sigma_i`` (samples ``theta + z``,
+``z = sigma * eps``, ``eps ~ N(0, I)``), the gradient on ``theta`` divides by ``sigma_i`` per coordinate, and after each update
 
-    g_sigma = u @ (s**2 - 1) / N,   u = shaped fitness of the aggregated objective
+    g_sigma = u @ (eps**2 - 1) / N,   u = shaped fitness of the aggregated objective
 
 where ``u`` is the centered rank of the summed loss (``ws``) or the per-objective centered ranks
 combined with the aggregator's weights ``w / sum(w)`` (``upgrad``, ``mean``). ``g_sigma_i > 0`` means
-large ``|s_i|`` came with high loss, so ``sigma_i`` shrinks:
+large ``|eps_i|`` came with high loss, so ``sigma_i`` shrinks:
 
 * ``snes`` (Schaul et al., 2011): ``sigma *= exp(-lr_sigma / 2 * g_sigma)``.
 * ``pgpe`` (Sehnke et al., 2010): ``sigma -= lr_sigma * sigma * g_sigma`` (the PGPE gradient
-  ``(eps**2 - sigma**2) / sigma`` with ``eps = sigma * s``), each ``sigma_i`` changing by at most a
+  ``(z**2 - sigma**2) / sigma`` of the perturbation ``z = sigma * eps``), each ``sigma_i`` changing by at most a
   factor ``1 +- sigma_max_change`` per generation (evotorch's ``stdev_max_change``).
 
 References:
@@ -83,7 +86,7 @@ def aggregate_jacobian(
     norm_eps: float = 1e-4,
     reg_eps: float = 1e-4,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Combine Jacobian rows ``J`` (``[K, d]``) into one direction ``d = J^T w``; return ``(d, w)``."""
+    """Combine Jacobian rows ``J`` (``[K, D]``) into one direction ``d = J^T w``; return ``(d, w)``."""
     K = J.shape[0]
     if aggregator == "upgrad":
         U = torch.diag(torch.full((K,), 1.0 / K, dtype=J.dtype))
@@ -105,10 +108,10 @@ def make_es_optimizer(
     rmsprop_alpha: float = 0.99,
     rmsprop_eps: float = 1e-8,
 ) -> torch.optim.Optimizer:
-    """Optimizer on the search mean: ``sgd``, ``adam`` or ``rmsprop``."""
+    """Optimizer on the search mean ``theta``: ``sgd``, ``adam`` or ``rmsprop``."""
     if optim == "adam":
         return torch.optim.Adam(params, lr=float(lr), betas=tuple(adam_betas), eps=float(adam_eps))
-    if optim == "sgd":  # plain SGD on the mean (evosax OpenES / GuidedES default optimizer)
+    if optim == "sgd":  # plain SGD on theta (evosax OpenES / GuidedES default optimizer)
         return torch.optim.SGD(params, lr=float(lr))
     if optim == "rmsprop":
         return torch.optim.RMSprop(params, lr=float(lr), alpha=float(rmsprop_alpha), eps=float(rmsprop_eps))
@@ -123,7 +126,7 @@ def guided_noise(
     guided_alpha: float,
     guided_sigma: float,
 ) -> torch.Tensor:
-    """Guided ES sampling: keep ``sqrt(alpha)`` of the isotropic ``eps`` and add noise along ``guide``."""
+    """Guided ES sampling: keep ``sqrt(alpha)`` of the isotropic noise ``eps`` and add noise along ``guide``."""
     U = torch.linalg.qr(torch.stack(guide, dim=1))[0]  # [D, k'] orthonormal guiding basis
     e_sub = torch.randn(eps.shape[0], U.shape[1], generator=gen, dtype=torch.float32)
     sub_scale = (guided_sigma / sigma) if guided_sigma > 0 else math.sqrt((1.0 - guided_alpha) * eps.shape[1] / U.shape[1])
@@ -161,29 +164,27 @@ def _sigma_stats(sigma: Any) -> Tuple[float, float, float]:
 def adapt_sigma(
     sigma: torch.Tensor,
     u: torch.Tensor,
-    s: torch.Tensor,
+    eps: torch.Tensor,
     rule: str,
     lr: float,
     max_change: float,
 ) -> torch.Tensor:
-    """One SNES / PGPE step on the per-parameter ``sigma`` [d] from shaped fitness ``u`` [N] (higher = worse)
-    and standard-normal samples ``s`` [N, d] (see module docstring)."""
-    g_sigma = (u @ (s * s - 1.0)) / s.shape[0]
+    """One SNES / PGPE step on the per-parameter ``sigma`` [D] from shaped fitness ``u`` [N] (higher = worse)
+    and the standard-normal noise ``eps`` [N, D] (see module docstring)."""
+    g_sigma = (u @ (eps * eps - 1.0)) / eps.shape[0]
     if rule == "snes":
         return sigma * torch.exp(-0.5 * lr * g_sigma)
     new = sigma - lr * sigma * g_sigma
     return torch.minimum(torch.maximum(new, sigma * (1.0 - max_change)), sigma * (1.0 + max_change))
 
 
-def true_jacobian(trainer: Any, z: torch.Tensor, batches: list) -> torch.Tensor:
-    """Backprop Jacobian ``[K, d]`` of the per-task losses w.r.t. ``z`` at ``theta_0 + alpha * z``.
+def true_jacobian(trainer: Any, theta: torch.Tensor, batches: list) -> torch.Tensor:
+    """Backprop Jacobian ``[K, D]`` of the per-task losses w.r.t. the weights at ``theta``.
 
-    Same mini-batches and eval-mode forward as the population fitness. Only for the ``full``
-    adapter (``FullParameters``), where ``dL/dz = alpha * dL/dtheta``; the other adapters detach
-    ``z`` inside ``expand``, so there is no autograd path from ``z`` to ``theta``.
+    Same mini-batches and eval-mode forward as the population fitness.
     """
     model = trainer.model
-    trainer.adapt_parameters(z)
+    trainer.set_theta(theta)
     model.eval()
     params = list(model.parameters())
     K = int(trainer.task_num)
@@ -197,7 +198,7 @@ def true_jacobian(trainer: Any, z: torch.Tensor, batches: list) -> torch.Tensor:
                     (g if g is not None else torch.zeros_like(p)).reshape(-1).float()
                     for g, p in zip(grads, params)
                 ])
-    return (J_theta * (trainer.adapter_alpha / len(batches))).cpu()
+    return (J_theta / len(batches)).cpu()
 
 
 def run_mo_openes(
@@ -237,19 +238,19 @@ def run_mo_openes(
     guided_ema: float = 0.0,
     **_unused: Any,
 ) -> Dict[str, Any]:
-    """MO-OpenES ask-and-tell on latent vectors ``z`` (see module docstring).
+    """MO-OpenES ask-and-tell on the weights ``theta`` (see module docstring).
 
-    The search distribution is ``N(mean, sigma^2 I)`` with ``mean`` starting at
-    ``adapter.z0``; the mean is the returned solution (``pareto_center_X``), so the
-    trainer ends at ``theta_0 + adapter.forward(mean)``. ``pareto_F`` / ``pareto_X``
-    are the non-dominated members of the last population (for logging and checkpoints).
+    The search distribution is ``N(theta, sigma^2 I)`` with ``theta`` starting at the current
+    weights ``theta_0``; ``theta`` is the returned solution (``pareto_center_X``) and the trainer
+    ends at it. ``pareto_F`` / ``pareto_X`` are the non-dominated members of the last population
+    (for logging and checkpoints).
 
     Parameters
     ----------
     lr : float
-        Learning rate of the optimizer on the mean.
+        Learning rate of the optimizer on ``theta``.
     optim, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps
-        Optimizer for the mean: ``"sgd"``, ``"adam"`` (default; ``adam_*`` apply) or ``"rmsprop"``
+        Optimizer for ``theta``: ``"sgd"``, ``"adam"`` (default; ``adam_*`` apply) or ``"rmsprop"``
         (``rmsprop_*`` apply; ``alpha`` is the squared-gradient smoothing constant).
     sigma, sigma_decay, sigma_min
         Perturbation std; after each update ``sigma = max(sigma * sigma_decay, sigma_min)``.
@@ -275,15 +276,15 @@ def run_mo_openes(
     evo_eval_freq : int
         Full test-set evaluation every this many iterations (see :func:`run_nsga2`).
     grad_cos_freq : int
-        Every this many iterations, backprop the true per-task gradients at the mean on the
+        Every this many iterations, backprop the true per-task gradients at ``theta`` on the
         same mini-batch and log cosine(pseudo-gradient_k, true gradient_k) and
         cosine(ES direction, same aggregator applied to the true Jacobian). ``0`` disables.
         Diagnostic only: the update never uses true gradients.
     grad_save_freq : int
-        Every this many iterations, starting at iteration 0 (the initial mean, before the first
-        update), store the search mean and the true and pseudo-gradients per objective plus the aggregated ES
-        direction and its true-gradient counterpart in ``<save_path>/gradients.pth.tar``
-        (float32, rewritten at each snapshot). ``0`` disables. Needs ``evo_adapter=full``.
+        Every this many iterations, starting at iteration 0 (``theta_0``, before the first
+        update), store the search mean ``theta`` and the true and pseudo-gradients per objective plus the
+        aggregated ES direction and its true-gradient counterpart in ``<save_path>/gradients.pth.tar``
+        (float32, rewritten at each snapshot). ``0`` disables. Needs a ``save_path``.
     guided_k, guided_alpha
         Guided ES sampling (Maheswaranathan et al., 2019; evosax ``GuidedES``). ``guided_k > 0``
         keeps the last ``k`` ES directions (unit vectors, FIFO) as guiding subspace U and draws
@@ -292,14 +293,14 @@ def run_mo_openes(
         into the subspace, and the total perturbation size matches plain OpenES (``alpha = 1``).
         Self-guided: no backprop. The rank-based estimator below is unchanged.
     guided_sigma
-        If > 0, the perturbation size along each guiding direction (in z units), set directly
+        If > 0, the perturbation size along each guiding direction (in weight units), set directly
         instead of ``sigma * sqrt((1 - alpha) * D / k)``. Keeps the guided part in the near-linear range.
     guided_ema
         If > 0, guide with one direction: an exponential moving average of past unit ES directions
         with this decay (0.9 ~ the last 10 generations), instead of the FIFO of the last k.
     """
-    if trainer.adapter is None:
-        raise RuntimeError("init_parameter_sharing() first.")
+    if trainer.theta_0 is None:
+        raise RuntimeError("prepare_evolution() first.")
     aggregator = str(aggregator).strip().lower()
     if aggregator not in AGGREGATORS:
         raise ValueError(f"Unknown MO-OpenES aggregator {aggregator!r}; options: {AGGREGATORS}")
@@ -324,22 +325,18 @@ def run_mo_openes(
     configure_moea_random_seed(seed)
     gen = torch.Generator().manual_seed(int(seed))
 
-    n_var = int(trainer.adapter.num_dims)
+    n_var = int(trainer.theta_0.numel())
     n_obj = int(trainer.task_num)
-    if grad_cos_freq > 0 and type(trainer.adapter).__name__ != "FullParameters":
-        print(f"[EvoMTL] grad_cos_freq ignored: true-gradient cosine needs evo_adapter=full, "
-              f"got {type(trainer.adapter).__name__}.", flush=True)
-        grad_cos_freq = 0
-    if grad_save_freq > 0 and (type(trainer.adapter).__name__ != "FullParameters"
-                               or not getattr(trainer, "save_path", None)):
-        print("[EvoMTL] grad_save_freq ignored: needs evo_adapter=full and a save_path.", flush=True)
+    if grad_save_freq > 0 and not getattr(trainer, "save_path", None):
+        print("[EvoMTL] grad_save_freq ignored: needs a save_path.", flush=True)
         grad_save_freq = 0
     grad_snapshots: Dict[str, list] = {"generation": [], "mean": [], "true": [], "pseudo": [],
                                        "direction": [], "true_direction": []}
-    mean = torch.as_tensor(trainer.adapter.z0, dtype=torch.float32).reshape(-1).clone()
-    mean.requires_grad_(True)
+    theta_0 = trainer.theta_0.detach().cpu().float()
+    theta = theta_0.clone()
+    theta.requires_grad_(True)
     optim = str(optim).strip().lower()
-    optimizer = make_es_optimizer([mean], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps)
+    optimizer = make_es_optimizer([theta], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps)
     sigma = float(sigma)
     if sigma_adapt != "none":  # one step size per parameter, all starting at sigma
         sigma = torch.full((n_var,), sigma, dtype=torch.float32)
@@ -397,13 +394,14 @@ def run_mo_openes(
             eps = guided_noise(eps, guide, gen, sigma, guided_alpha, guided_sigma)
         if antithetic:
             eps = torch.cat([eps, -eps])
-        population = mean.detach() + sigma * eps
+        z = sigma * eps  # perturbations: member i is theta + z_i
+        population = theta.detach() + z
 
         # evaluate every member on the same mini-batch(es)
         shared_batches = trainer._sample_batches(train_dataloaders, num_batches)
         F = np.zeros((pop_size, n_obj), dtype=np.float64)
         for i in range(pop_size):
-            trainer.adapt_parameters(population[i])
+            trainer.set_theta(population[i])
             F[i] = trainer.evaluate_multiobjective_losses(
                 train_dataloaders, prefetched_batches=shared_batches
             )
@@ -416,15 +414,15 @@ def run_mo_openes(
             direction, w = J[0], torch.ones(1, dtype=torch.float32)
         else:
             shaped = shape_fitness(F, fitness_shaping)  # [N, K]
-            J = shaped.T @ eps * scale  # [K, d]
+            J = shaped.T @ eps * scale  # [K, D]
             direction, w = aggregate_jacobian(J, aggregator, upgrad_norm_eps, upgrad_reg_eps)
 
-        # diagnostic: compare with backprop gradients at the (pre-update) mean, same batch
+        # diagnostic: compare with backprop gradients at the (pre-update) theta, same batch
         true_cos = None
         do_cos = grad_cos_freq > 0 and iteration % int(grad_cos_freq) == 0
         do_save = grad_save_freq > 0 and iteration % int(grad_save_freq) == 0
         if do_cos or do_save:
-            J_true = true_jacobian(trainer, mean.detach(), shared_batches)
+            J_true = true_jacobian(trainer, theta.detach(), shared_batches)
             J_obj = shape_fitness(F, fitness_shaping).T @ eps * scale
             if aggregator == "ws":
                 d_true = J_true.sum(dim=0)
@@ -434,13 +432,13 @@ def run_mo_openes(
             true_cos = [_cosine(J_obj[k], J_true[k]) for k in range(n_obj)]
             dir_cos = _cosine(direction, d_true)
         if do_save:
-            # gradients at the pre-update mean of generation iteration+1 (iteration 0 = initialization)
-            for key, val in (("generation", iteration), ("mean", mean.detach()), ("true", J_true), ("pseudo", J_obj),
+            # gradients at the pre-update theta of generation iteration+1 (iteration 0 = initialization)
+            for key, val in (("generation", iteration), ("mean", theta.detach()), ("true", J_true), ("pseudo", J_obj),
                              ("direction", direction), ("true_direction", d_true)):
                 grad_snapshots[key].append(val if key == "generation" else val.detach().float().clone())
             torch.save({
                 "generation": torch.tensor(grad_snapshots["generation"]),
-                "mean": torch.stack(grad_snapshots["mean"]),            # [S, D] search mean z = theta - theta_0
+                "mean": torch.stack(grad_snapshots["mean"]),            # [S, D] search mean theta (weights)
                 "true": torch.stack(grad_snapshots["true"]),            # [S, K, D] backprop gradients
                 "pseudo": torch.stack(grad_snapshots["pseudo"]),        # [S, K, D] per-objective ES estimates
                 "direction": torch.stack(grad_snapshots["direction"]),  # [S, D] aggregated ES direction
@@ -449,12 +447,12 @@ def run_mo_openes(
                 "pop_size": pop_size, "lr": float(lr), "sigma": sigma, "dims": n_var,
             }, os.path.join(trainer.save_path, "gradients.pth.tar"))
 
-        mean.grad = direction.clone()
+        theta.grad = direction.clone()
         optimizer.step()
         if guided_k > 0:
             guide = update_guide(guide, direction, guided_k, guided_ema)
         if sigma_adapt != "none":
-            # shaped fitness of the aggregated objective: the summed loss, or the ranks weighted like the mean
+            # shaped fitness of the aggregated objective: the summed loss, or the ranks weighted like the update
             u = shaped if aggregator == "ws" else shaped @ (w / w.abs().sum().clamp_min(1e-30))
             sigma = adapt_sigma(sigma, u, eps, sigma_adapt, sigma_lr, sigma_max_change)
             sigma = (sigma * float(sigma_decay)).clamp_min(float(sigma_min))
@@ -477,7 +475,7 @@ def run_mo_openes(
         extras_wandb: Dict[str, Any] = {
             "evo/openes/sigma": sig_mean,
             "evo/openes/direction_norm": float(direction.norm()),
-            "evo/openes/mean_norm": float(mean.detach().norm()),
+            "evo/openes/mean_norm": float((theta.detach() - theta_0).norm()),  # distance from theta_0
             "evo/openes/pop_losses/avg": float(F.mean()),
         }
         if sigma_adapt != "none":
@@ -510,8 +508,8 @@ def run_mo_openes(
         )
         trainer._wandb_log_evo_front_metrics(iteration, pareto_front, step, extras=extras_wandb)
 
-        # the mean is the ES solution: snapshot it on the current batch (and test periodically)
-        trainer.adapt_parameters(mean.detach())
+        # theta is the ES solution: snapshot it on the current batch (and test periodically)
+        trainer.set_theta(theta.detach())
         train_batch_metrics = trainer.metrics_snapshot_from_prefetched_batches(shared_batches)
         run_eval = should_run_full_test(iteration, num_iterations, evo_eval_freq)
         if run_eval:
@@ -539,7 +537,7 @@ def run_mo_openes(
                 for i, task in enumerate(trainer.task_name)
             )
             print(
-                f"[EvoMTL] Mean z TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
+                f"[EvoMTL] Mean theta TRAIN (curr batch) iteration {iteration + 1:04d} | {parts}",
                 flush=True,
             )
 
@@ -567,20 +565,19 @@ def run_mo_openes(
     if csv_file is not None:
         csv_file.close()
     if isinstance(sigma, torch.Tensor):
-        # final step size per parameter tensor (same order as the flat parameter vector of the full adapter)
-        if type(trainer.adapter).__name__ == "FullParameters":
-            start = 0
-            for name, p in trainer.model.named_parameters():
-                s = sigma[start:start + p.numel()]
-                print(f"[EvoMTL] sigma {name:45s} mean={float(s.mean()):.4g} "
-                      f"min={float(s.min()):.4g} max={float(s.max()):.4g}", flush=True)
-                start += p.numel()
+        # final step size per parameter tensor (same order as the flat weight vector theta)
+        start = 0
+        for name, p in trainer.model.named_parameters():
+            s = sigma[start:start + p.numel()]
+            print(f"[EvoMTL] sigma {name:45s} mean={float(s.mean()):.4g} "
+                  f"min={float(s.min()):.4g} max={float(s.max()):.4g}", flush=True)
+            start += p.numel()
         if getattr(trainer, "save_path", None):
             torch.save(sigma.float(), os.path.join(trainer.save_path, "sigma_final.pt"))
 
-    mean_X = mean.detach().numpy().copy()
+    theta_X = theta.detach().numpy().copy()
     nd_idx = pareto_front_indices(population_F) if len(population_F) else np.arange(0)
-    trainer.adapt_parameters(mean_X)
+    trainer.set_theta(theta_X)
     out = {
         "method": method,
         "pareto_F": population_F[nd_idx],
@@ -588,7 +585,7 @@ def run_mo_openes(
         "population_F": population_F,
         "population_X": population_X,
         "hv_weights": None,
-        "pareto_center_X": mean_X,
+        "pareto_center_X": theta_X,
         "hv_ref_point": None if hv_ref_point is None else np.asarray(hv_ref_point, dtype=np.float64),
         "hv_center_aggregation": None,
         "hv_softmax_temperature": None,

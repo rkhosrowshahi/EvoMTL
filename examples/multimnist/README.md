@@ -57,7 +57,7 @@ Important arguments:
 - `epochs`: Training epochs. Default: `100`.
 - `mode`: `train` or `test`.
 
-**EvoMTL:** pass `--evo_training` (and optional `--evo_*` flags) to use `EvoMTLTrainer` instead of the standard `Trainer`. `evo_schedule` selects one of two training directions:
+**EvoMTL:** pass `--evo_training` (and optional `--evo_*` flags) to use `EvoMTLTrainer` instead of the standard `Trainer`. Every algorithm searches the network weights `theta` directly. `evo_schedule` selects one of two training directions:
 
 | `evo_schedule` | Training |
 | --- | --- |
@@ -66,12 +66,11 @@ Important arguments:
 
 ```shell
 # evolution: MO-OpenES with UPGrad, 10-epoch budget (2344 generations)
-python main.py --config configs/10epochs/mnist/evomtl/mo_openes-upgrad-full/pop_128/adam-lr_0.001/seed1.yaml
+python main.py --config configs/10epochs/mnist/evomtl/mo_openes-upgrad/pop_128/adam-lr_0.001/seed1.yaml
 
-# gd_then_evolution: 30 epochs of gradient descent (EW), then NSGA-II on a layer-wise random projection
+# gd_then_evolution: 30 epochs of gradient descent (EW), then NSGA-II on the weights in the box theta_0 +- 0.01
 python main.py --weighting EW --arch HPS --epochs 30 --evo_training --evo_schedule gd_then_evolution \
-    --evo_moea nsga2 --evo_adapter layerwise_random_proj --evo_adapter_k 128 --evo_adapter_alpha 0.001 \
-    --evo_lb -1 --evo_ub 1 --evo_iterations 100 --evo_pop_size 100
+    --evo_moea nsga2 --evo_lb -0.01 --evo_ub 0.01 --evo_iterations 100 --evo_pop_size 100
 ```
 
 The ES methods (`mo_openes`, `psl_es`) use raw fitness by default (`evo_es_fitness_shaping: raw`): the losses minus the population mean, or the unranked pair differences for PSL. Set `evo_es_fitness_shaping: centered_ranks` for the rank-based OpenAI-ES estimator; PSL's `evo_psl_rank_groups` > 1 needs it.

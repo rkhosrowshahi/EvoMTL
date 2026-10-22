@@ -31,7 +31,7 @@ PANELS = [("true_cos_top-left", "Task 1 (top-left)"),
           ("true_cos_bottom-right", "Task 2 (bottom-right)"),
           ("true_cos_direction", "Update direction")]
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # categorical slots, fixed order
-NAMES = {"guided_es-ws-full": "Guided-ES (WS)", "mo_guided_es-upgrad-full": "MO-Guided-ES (UPGrad)"}
+NAMES = {"guided_es-ws": "Guided-ES (WS)", "mo_guided_es-upgrad": "MO-Guided-ES (UPGrad)"}
 
 
 def run_info(run_dir):

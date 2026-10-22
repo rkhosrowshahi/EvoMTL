@@ -27,8 +27,6 @@ epochs: 0                      # no gradient-descent phase: training is ES only
 evo_training: true
 evo_schedule: evolution        # evolutionary training only, no gradient descent
 evo_moea: mo_openes
-evo_adapter: full
-evo_adapter_alpha: 1.0
 evo_iterations: 2344        # 10 epochs: 2,344 generations x 256 images
 evo_pop_size: 1024
 evo_num_batches: 1
@@ -51,12 +49,12 @@ evo_es_guided_ema: 0.9        # guide = moving average of past directions with t
 evo_es_grad_cos_freq: 1       # log cosine(pseudo-gradient, backprop gradient); 0 = off
 
 # Paths
-save_path: logs/mnist/10epochs/guided_es-ws-full/pop_1024/adam-lr_1e-3-sigma_0.1/seed_3-s0.05_a0.9_ema0.9/
+save_path: logs/mnist/10epochs/guided_es-ws/pop_1024/adam-lr_1e-3-sigma_0.1/seed_3-s0.05_a0.9_ema0.9/
 load_path: null
 
 # Weights & Biases
 wandb_entity: rasa_research
 wandb_enable: true
 wandb_project: multimnist
-wandb_name: guided_es-ws-full-10epochs-s0.05_a0.9_ema0.9-pop_1024-sigma_0.1-adam-lr_0.001-seed3
-wandb_group: guided_es-ws-full-10epochs-s0.05_a0.9_ema0.9-pop_1024-sigma_0.1-adam-lr_0.001
+wandb_name: guided_es-ws-10epochs-s0.05_a0.9_ema0.9-pop_1024-sigma_0.1-adam-lr_0.001-seed3
+wandb_group: guided_es-ws-10epochs-s0.05_a0.9_ema0.9-pop_1024-sigma_0.1-adam-lr_0.001
