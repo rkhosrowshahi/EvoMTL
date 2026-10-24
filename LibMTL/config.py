@@ -147,8 +147,9 @@ _parser.add_argument(
          'descent OpenES: per-objective OpenES pseudo-gradients combined by min-norm MGDA, or by a noise-aware '
          'program; uses the --evo_es_* and --evo_pcd_* flags), or pcd_guidedes (PCD-GuidedES: the same with Guided '
          'ES sampling along past common directions; also uses --evo_es_guided_*), or pcd_openes_libmtl (PCD-OpenES with '
-         'the min-norm solver and gradient normalizers of LibMTL MGDA), or sc_de (SC-DE: single-centre DE, the centre moved along fitness-oriented donor '
-         'differences by --evo_es_optim at --evo_es_lr; uses --evo_es_sigma and --evo_scde_*)',
+         'the min-norm solver and gradient normalizers of LibMTL MGDA), or sc_de (SC-DE: single-centre DE, the '
+         'centre moved along fitness-oriented donor differences by --evo_es_optim at --evo_es_lr; uses '
+         '--evo_es_sigma and --evo_scde_*)',
 )
 _parser.add_argument('--evo_iterations', type=int, default=30,
                     help='MOEA outer iterations: NSGA-II / MOPSO-CD generations or COMO-CMA-ES iterations')
