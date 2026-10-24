@@ -1,7 +1,7 @@
 """How many generations until ES displacement points along the negative true gradient? (local experiment)
 
-Runs an ES config exactly as ``main.py`` does (same model, data, seeds, Guided ES / MO-OpenES loop) with
-W&B off, and records at every generation t:
+Runs an OpenES-family config (openes, guidedes, mo_upgrad_openes, mo_upgrad_guidedes, mo_mean_openes) exactly as
+``main.py`` does (same model, data, seeds, ES loop) with W&B off, and records at every generation t:
 
 * ``p_t``  the ES pseudo-gradient that drives the update (the aggregated direction)
 * ``g_t``  the backprop gradient at the mean on the same mini-batch, aggregated by the same rule
@@ -25,9 +25,9 @@ Writes to ``--out``: ``window_cos.csv`` (mean and quartiles per T, all windows a
 
 Usage (from examples/multimnist; extra flags go to main.py and override the YAML)::
 
-    uv run python scripts/es_window_cosine.py --config configs/10epochs/mnist/evomtl/guided_es-ws/pop_128/adam-lr_0.001/seed1_s0.05_a0.9_ema0.9.yaml
-    uv run python scripts/es_window_cosine.py --config <same> --evo_pop_size 2048 --out logs/mnist/window_cos/guided_es-ws/pop_2048
-    uv run python scripts/es_window_cosine.py --analyze logs/mnist/window_cos/guided_es-ws/pop_128/vectors.npz
+    uv run python scripts/es_window_cosine.py --config configs/10epochs/mnist/evomtl/guidedes/pop_128/adam-lr_0.001/seed1_s0.05_a0.9_ema0.9.yaml
+    uv run python scripts/es_window_cosine.py --config <same> --evo_pop_size 2048 --out logs/mnist/window_cos/guidedes/pop_2048
+    uv run python scripts/es_window_cosine.py --analyze logs/mnist/window_cos/guidedes/pop_128/vectors.npz
 """
 
 import argparse
@@ -38,6 +38,9 @@ import sys
 import numpy as np
 
 EXAMPLE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# OpenES-family evo_moea keys -> rule that combines the per-task gradients (as the ES direction does)
+AGGREGATORS = {"openes": "ws", "guidedes": "ws", "mo_upgrad_openes": "upgrad", "mo_upgrad_guidedes": "upgrad",
+               "mo_mean_openes": "mean"}
 PHASES = (("all", 0.0, 1.0), ("early", 0.0, 0.25), ("middle", 0.25, 0.5), ("late", 0.5, 1.0))
 METRICS = ("est", "step_avg", "step_start", "drift", "coherence", "theory")
 
@@ -52,16 +55,18 @@ def run_and_record(cfg_path, out, forward):
     os.chdir(EXAMPLE_DIR)  # dataset_path '.' and relative save paths, as with main.py
     import main as mm
     from LibMTL.config import LibMTL_args
-    from LibMTL.evomtl.moea import mo_openes as es
+    from LibMTL.evomtl.moea import es_loop as es
+    from LibMTL.evomtl.moea.es_common import upgrad_aggregate
     from LibMTL.utils import set_device, set_random_seed
 
     sys.argv = ["main.py", "--config", cfg_path, "--save_path", out + "/", *forward]
     params = mm.parse_args(LibMTL_args)
     params.wandb_enable, params.wandb_project = False, None
     params.evo_es_grad_cos_freq = 1  # backprop gradient at every generation (captured below)
-    if params.evo_moea not in ("mo_openes", "mo-openes", "openes"):
-        raise SystemExit(f"needs an OpenES / Guided ES config (evo_moea mo_openes), got {params.evo_moea!r}")
-    aggregator = params.evo_es_aggregator
+    moea = params.evo_moea.replace("-", "_")
+    if moea not in AGGREGATORS:
+        raise SystemExit(f"needs an OpenES-family config (evo_moea {', '.join(AGGREGATORS)}), got {params.evo_moea!r}")
+    aggregator = AGGREGATORS[moea]
     n, d = int(params.evo_iterations), None
     rec = {}
 
@@ -83,8 +88,8 @@ def run_and_record(cfg_path, out, forward):
         def step(*sa, **sk):
             t = rec["t"]
             J = rec.pop("J_true")
-            g = J.sum(0) if aggregator == "ws" else es.aggregate_jacobian(
-                J, aggregator, params.upgrad_norm_eps, params.upgrad_reg_eps)[0]
+            g = J.sum(0) if aggregator == "ws" else J.mean(0) if aggregator == "mean" else upgrad_aggregate(
+                J, params.upgrad_norm_eps, params.upgrad_reg_eps)[0]
             rec["m"][t] = mean.detach().numpy()
             rec["p"][t] = mean.grad.detach().numpy()
             rec["g"][t] = g.numpy()
@@ -103,7 +108,7 @@ def run_and_record(cfg_path, out, forward):
     mm.main(params)
     t = rec["t"]
     meta = dict(aggregator=aggregator, pop_size=int(params.evo_pop_size), dims=rec["p"].shape[1],
-                config=cfg_path, guided_k=int(params.evo_es_guided_k))
+                config=cfg_path, guided_k=int(params.evo_es_guided_k) if moea.endswith("guidedes") else 0)
     return rec["p"][:t], rec["g"][:t], rec["m"][:t + 1], meta
 
 

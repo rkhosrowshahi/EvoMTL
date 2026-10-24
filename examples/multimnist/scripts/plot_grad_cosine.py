@@ -8,7 +8,7 @@ of an isotropic Gaussian estimator, sqrt(n / (n + d)), with n = N / 2 antithetic
 Usage (from examples/multimnist)::
 
     uv run python scripts/plot_grad_cosine.py
-    uv run python scripts/plot_grad_cosine.py --runs "logs/mnist/10epochs/*guided_es*/pop_*/*/seed_*" --smooth 50
+    uv run python scripts/plot_grad_cosine.py --runs "logs/mnist/10epochs/*guidedes/pop_*/*/seed_*" --smooth 50
 """
 
 import argparse
@@ -26,12 +26,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 EXAMPLE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_RUNS = os.path.join(EXAMPLE_DIR, "logs/mnist/10epochs/*guided_es*/pop_*/*/seed_*")
+# GuidedES and MO-UPGrad-GuidedES runs, and the run folders from before the rename (guided_es-ws, mo_guided_es-upgrad)
+DEFAULT_RUNS = [os.path.join(EXAMPLE_DIR, f"logs/mnist/10epochs/{m}/pop_*/*/seed_*")
+                for m in ("guidedes", "mo_upgrad_guidedes", "*guided_es*")]
 PANELS = [("true_cos_top-left", "Task 1 (top-left)"),
           ("true_cos_bottom-right", "Task 2 (bottom-right)"),
           ("true_cos_direction", "Update direction")]
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # categorical slots, fixed order
-NAMES = {"guided_es-ws": "Guided-ES (WS)", "mo_guided_es-upgrad": "MO-Guided-ES (UPGrad)"}
+NAMES = {"guidedes": "GuidedES", "mo_upgrad_guidedes": "MO-UPGrad-GuidedES",
+         "guided_es-ws": "GuidedES", "mo_guided_es-upgrad": "MO-UPGrad-GuidedES"}
 
 
 def run_info(run_dir):
@@ -59,7 +62,7 @@ def moving_average(x, w):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--runs", nargs="+", default=[DEFAULT_RUNS], help="run folders or glob patterns")
+    p.add_argument("--runs", nargs="+", default=DEFAULT_RUNS, help="run folders or glob patterns")
     p.add_argument("--out", default=os.path.join(EXAMPLE_DIR, "figures/10epochs/grad_cosine"))
     p.add_argument("--smooth", type=int, default=50, help="moving-average window (generations)")
     args = p.parse_args()

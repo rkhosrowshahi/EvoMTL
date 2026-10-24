@@ -61,19 +61,19 @@ Important arguments:
 
 | `evo_schedule` | Training |
 | --- | --- |
-| `evolution` | Multi-objective evolutionary training from the initial weights, no gradient descent (`epochs: 0`). Either a Pareto set / front (NSGA-II, MOPSO-CD and COMO-CMA through `evo_moea`, or Pareto set learning with ES, `evo_moea: psl_es`) or a single Pareto-stationary network (ES with Jacobian descent, `evo_moea: mo_openes` with `evo_es_aggregator: upgrad`). |
+| `evolution` | Multi-objective evolutionary training from the initial weights, no gradient descent (`epochs: 0`). Either a Pareto set / front (NSGA-II, MOPSO-CD and COMO-CMA through `evo_moea`, or Pareto set learning with ES, `evo_moea: psl_es`) or a single network from an evolution strategy: `openes` / `guidedes` (OpenES / Guided ES on the sum of losses), `snes` / `pgpe` (per-parameter step sizes), `mo_upgrad_openes` / `mo_upgrad_guidedes` (per-objective pseudo-gradients combined by UPGrad), `mo_mean_openes` (their mean), `mo_mgda_openes` / `mo_mgda_guidedes` / `mo_mgda_openes_libmtl` (MGDA common descent direction, `evo_mgda_*` flags). One file per algorithm in `LibMTL/evomtl/moea/`. |
 | `gd_then_evolution` (default) | `epochs` of multi-objective gradient descent with `weighting`, then the same evolutionary training as fine-tuning that shapes the Pareto front. |
 
 ```shell
-# evolution: MO-OpenES with UPGrad, 10-epoch budget (2344 generations)
-python main.py --config configs/10epochs/mnist/evomtl/mo_openes-upgrad/pop_128/adam-lr_0.001/seed1.yaml
+# evolution: MO-UPGrad-OpenES, 10-epoch budget (2344 generations)
+python main.py --config configs/10epochs/mnist/evomtl/mo_upgrad_openes/pop_128/adam-lr_0.001/seed1.yaml
 
 # gd_then_evolution: 30 epochs of gradient descent (EW), then NSGA-II on the weights in the box theta_0 +- 0.01
 python main.py --weighting EW --arch HPS --epochs 30 --evo_training --evo_schedule gd_then_evolution \
     --evo_moea nsga2 --evo_lb -0.01 --evo_ub 0.01 --evo_iterations 100 --evo_pop_size 100
 ```
 
-The ES methods (`mo_openes`, `psl_es`) use raw fitness by default (`evo_es_fitness_shaping: raw`): the losses minus the population mean, or the unranked pair differences for PSL. Set `evo_es_fitness_shaping: centered_ranks` for the rank-based OpenAI-ES estimator; PSL's `evo_psl_rank_groups` > 1 needs it.
+The ES methods (`openes`, `mo_upgrad_openes`, `mo_mgda_openes`, `psl_es`, ...) use raw fitness by default (`evo_es_fitness_shaping: raw`): the losses minus the population mean, or the unranked pair differences for PSL. Set `evo_es_fitness_shaping: centered_ranks` for the rank-based OpenAI-ES estimator; PSL's `evo_psl_rank_groups` > 1 needs it.
 
 See [docs/evolutionary_algorithms.md](docs/evolutionary_algorithms.md) for the methods, options, configs, outputs and plotting scripts.
 

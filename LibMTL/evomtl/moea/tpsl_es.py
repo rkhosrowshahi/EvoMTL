@@ -82,7 +82,7 @@ import torch
 
 from .common import configure_moea_random_seed, should_run_full_test
 from .hv import pareto_front_indices
-from .mo_openes import _mean_pairwise_cosine, centered_ranks, guided_noise, make_es_optimizer, update_guide
+from .es_common import _mean_pairwise_cosine, centered_ranks, guided_noise, make_es_optimizer, update_guide
 from .psl_es import (
     PSL_GUIDES,
     SCALARIZATIONS,

@@ -1,6 +1,6 @@
 """Pareto set learning with OpenES (PSL-OpenES): one ES run learns a whole Pareto front.
 
-MO-OpenES and OpenES search for one network. Here the search distribution is over a
+MO-UPGrad-OpenES and OpenES search for one network. Here the search distribution is over a
 preference-conditioned family of networks (for two tasks a line in weight space, as in PaMaL):
 
     theta(lam) = theta + S B phi(lam)
@@ -69,7 +69,7 @@ family.
 The front is read out by evaluating ``theta(lam)`` on a grid of preferences: ``front.csv`` at
 every test evaluation, ``psl_result.pt`` at the end. The balanced network ``theta`` is the
 returned solution (``pareto_center_X``) and fills the train/test columns of ``metrics.csv``, like
-the ES mean of :func:`~LibMTL.evomtl.moea.mo_openes.run_mo_openes`.
+the ES mean of :func:`~LibMTL.evomtl.moea.es_loop.run_es`.
 
 References:
 - PaMaL: Dimitriadis, Frossard and Fleuret, "Pareto Manifold Learning: Tackling multiple tasks
@@ -92,7 +92,7 @@ import torch
 
 from .common import configure_moea_random_seed, should_run_full_test
 from .hv import pareto_front_indices
-from .mo_openes import centered_ranks, guided_noise, make_es_optimizer, update_guide
+from .es_common import centered_ranks, guided_noise, make_es_optimizer, update_guide
 from .pymoo_deps import Hypervolume
 
 SCALARIZATIONS = ("tch", "ws", "hv")
@@ -259,7 +259,7 @@ def run_psl_es(
     hv_ref_point
         If given, the test hypervolume of that front is printed and logged (``test_hv``).
 
-    The other parameters are those of :func:`~LibMTL.evomtl.moea.mo_openes.run_mo_openes`; Guided ES
+    The other parameters are those of :func:`~LibMTL.evomtl.moea.es_loop.run_es`; Guided ES
     sampling (``guided_*``) acts on ``x``. Needs antithetic sampling (both members of a pair share one
     preference).
     """
@@ -354,7 +354,7 @@ def run_psl_es(
 
     num_iterations = int(num_iterations)
     tasks = list(trainer.task_name)
-    # metrics.csv: the balanced network, same columns as run_mo_openes for the train/test metrics.
+    # metrics.csv: the balanced network, same columns as es_loop.run_es for the train/test metrics.
     # front.csv: every grid preference at every test evaluation (split = train batch / test set).
     csv_cols = (
         ["generation", "time_s", "sigma"]

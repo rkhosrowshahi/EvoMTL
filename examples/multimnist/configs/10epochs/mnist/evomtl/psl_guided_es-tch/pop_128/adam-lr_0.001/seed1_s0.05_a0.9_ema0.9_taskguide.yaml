@@ -7,7 +7,7 @@
 # Task guide: the guiding subspace is built from per-task directions estimated in three regions of the
 # preference range (thirds of lam_1), each smoothed over generations with decay 0.9 and placed in both
 # theta and B (12 directions), instead of a moving average of past updates.
-# Guided ES sampling as in MO-GuidedES-UPGrad: the guide is a moving average of past ES directions
+# Guided ES sampling as in MO-UPGrad-GuidedES: the guide is a moving average of past ES directions
 # over (theta, B) (decay 0.9), perturbed with size 0.05 along it; alpha=0.9 of the noise stays isotropic.
 
 # General

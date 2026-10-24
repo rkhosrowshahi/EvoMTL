@@ -67,7 +67,7 @@ import torch
 from ...weighting.UPGrad import _compute_gramian, _normalize, _project_weights, _regularize
 from .common import configure_moea_random_seed, should_run_full_test
 from .hv import pareto_front_indices
-from .mo_openes import _mean_pairwise_cosine, aggregate_jacobian, centered_ranks, guided_noise, make_es_optimizer
+from .es_common import _mean_pairwise_cosine, centered_ranks, guided_noise, make_es_optimizer, upgrad_aggregate
 from .psl_es import conditioned_indices, hypervolume, preference_features, preference_grid, simplex_basis
 
 
@@ -125,7 +125,7 @@ def run_dcpsl_es(
         (each corner needs at least 2 pairs).
     normalize : bool
         Scale each objective's gradient estimate to unit length before the dual-cone projections (default), or use
-        the estimates as they are (UPGrad as in :func:`~LibMTL.evomtl.moea.mo_openes.run_mo_openes`).
+        the estimates as they are (UPGrad as in :func:`~LibMTL.evomtl.moea.mo_upgrad_openes.run_mo_upgrad_openes`).
     fitness_shaping : str
         ``"raw"`` (default): per-objective pair differences ``d / 2``; ``"centered_ranks"``: their centered ranks
         within each anchor.
@@ -133,9 +133,9 @@ def run_dcpsl_es(
         Gramian normalisation and regularisation of the UPGrad QP.
     guided_k, guided_alpha, guided_sigma, guided_ema
         Guided ES sampling (``guided_k > 0`` switches it on): the guide is the M dual-cone edges at the centre,
-        moving averages with decay ``guided_ema``; ``guided_alpha`` and ``guided_sigma`` as in MO-OpenES.
+        moving averages with decay ``guided_ema``; ``guided_alpha`` and ``guided_sigma`` as in MO-UPGrad-GuidedES.
 
-    The other parameters are those of :func:`~LibMTL.evomtl.moea.mo_openes.run_mo_openes`. Needs antithetic sampling.
+    The other parameters are those of :func:`~LibMTL.evomtl.moea.es_loop.run_es`. Needs antithetic sampling.
     """
     if trainer.theta_0 is None:
         raise RuntimeError("prepare_evolution() first.")
@@ -277,7 +277,7 @@ def run_dcpsl_es(
         # tell: Jacobian at each anchor -> UPGrad for theta, dual-cone edge per corner -> least-squares B
         diff = F[:Mp] - F[Mp:]
         J_center = jacobian(0, diff, e, iso)
-        d_theta, w = aggregate_jacobian(J_center, "upgrad", upgrad_norm_eps, upgrad_reg_eps)
+        d_theta, w = upgrad_aggregate(J_center, upgrad_norm_eps, upgrad_reg_eps)
         corner_dirs = []
         for m in range(K):
             J_m = jacobian(m + 1, diff, e, iso)

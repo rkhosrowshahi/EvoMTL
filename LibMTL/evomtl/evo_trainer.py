@@ -7,7 +7,9 @@ Two schedules (``evo_schedule``):
 
 * ``evolution`` (:meth:`EvoMTLTrainer.evolve`): multi-objective evolutionary training from the
   initial weights, steps 2–4 below. Either a Pareto front (NSGA-II, MOPSO-CD, COMO-CMA,
-  PSL-ES, Tangent PSL-ES, Dual-cone PSL-ES) or a single Pareto-stationary network (MO-OpenES with Jacobian aggregation, e.g. UPGrad).
+  PSL-ES, Tangent PSL-ES, Dual-cone PSL-ES) or a single network from an evolution strategy (OpenES / GuidedES on the
+  sum of losses, or MO-UPGrad-OpenES / MO-MGDA-OpenES and their Guided ES variants on the per-objective
+  pseudo-gradients).
 * ``gd_then_evolution`` (:meth:`EvoMTLTrainer.train_then_evolve`, default): multi-objective
   gradient descent (step 1), then the same evolutionary training as fine-tuning that shapes the
   Pareto front.
@@ -15,7 +17,8 @@ Two schedules (``evo_schedule``):
 1. Gradient descent with the configured weighting (:meth:`Trainer.train`), ``gd_then_evolution`` only.
 2. Snapshot the starting weights ``theta_0``.
 3. Run NSGA-II, stochastic NSGA-II (SNSGA-II), MOPSO-CD (pymoo), COMO-CMA-ES / MO-CMA-ES (comocma),
-   or MO-OpenES (per-objective OpenES pseudo-gradients aggregated with UPGrad) with an ask-and-tell loop.
+   or an OpenES-family ES (e.g. MO-UPGrad-OpenES: per-objective OpenES pseudo-gradients aggregated with UPGrad)
+   with an ask-and-tell loop.
 4. Form a *Pareto-center* weight vector by averaging Pareto-set points weighted by
    marginal hypervolume contribution, apply it, then evaluate train and test (same
    path as :meth:`Trainer.test`) and save.
@@ -51,26 +54,41 @@ from .moea.hv import (
     pareto_center_weights_from_marginal_hv,
     pareto_front_indices,
 )
-from .moea.mo_openes import run_mo_openes
+from .moea.guidedes import run_guidedes
+from .moea.mo_mean_openes import run_mo_mean_openes
+from .moea.mo_mgda_guidedes import run_mo_mgda_guidedes
+from .moea.mo_mgda_openes import run_mo_mgda_openes
+from .moea.mo_mgda_openes_libmtl import run_mo_mgda_openes_libmtl
+from .moea.mo_upgrad_guidedes import run_mo_upgrad_guidedes
+from .moea.mo_upgrad_openes import run_mo_upgrad_openes
 from .moea.mopso import run_mopso
+from .moea.openes import run_openes
+from .moea.pgpe import run_pgpe
 from .moea.psl_es import run_psl_es
+from .moea.snes import run_snes
 from .moea.tpsl_es import run_tpsl_es
 from .moea.dcpsl_es import run_dcpsl_es
 from .moea.psl_taskguide import run_psl_taskguide
 from .moea.nsga2 import run_nsga2
-from .moea.pcd_guidedes import run_pcd_guidedes
-from .moea.pcd_openes import run_pcd_openes
-from .moea.pcd_openes_libmtl import run_pcd_openes_libmtl
 from .moea.sc_de import run_sc_de
 
-MO_OPENES_KEYS = ("mo_openes", "mo-openes", "openes")
+# Single-network evolution strategies, by evo_moea key (hyphens are accepted for underscores)
+ES_RUNNERS = {
+    "openes": run_openes,
+    "guidedes": run_guidedes,
+    "snes": run_snes,
+    "pgpe": run_pgpe,
+    "mo_upgrad_openes": run_mo_upgrad_openes,
+    "mo_upgrad_guidedes": run_mo_upgrad_guidedes,
+    "mo_mean_openes": run_mo_mean_openes,
+    "mo_mgda_openes": run_mo_mgda_openes,
+    "mo_mgda_guidedes": run_mo_mgda_guidedes,
+    "mo_mgda_openes_libmtl": run_mo_mgda_openes_libmtl,
+}
 PSL_ES_KEYS = ("psl_es", "psl-es")
 TPSL_ES_KEYS = ("tpsl_es", "tpsl-es")
 DCPSL_ES_KEYS = ("dcpsl_es", "dcpsl-es")
 PSL_TASKGUIDE_KEYS = ("psl_taskguide", "psl-taskguide", "psl_splitguide", "psl-splitguide")
-PCD_OPENES_KEYS = ("pcd_openes", "pcd-openes")
-PCD_GUIDEDES_KEYS = ("pcd_guidedes", "pcd-guidedes")
-PCD_OPENES_LIBMTL_KEYS = ("pcd_openes_libmtl", "pcd-openes-libmtl")
 SC_DE_KEYS = ("sc_de", "sc-de")
 
 
@@ -547,8 +565,8 @@ class EvoMTLTrainer(Trainer):
             runner = run_mopso
         elif moea_key in ("comocma", "mocma", "mo-cma-es"):
             runner = run_comocma
-        elif moea_key in MO_OPENES_KEYS:
-            runner = run_mo_openes
+        elif moea_key.replace("-", "_") in ES_RUNNERS:
+            runner = ES_RUNNERS[moea_key.replace("-", "_")]
         elif moea_key in PSL_ES_KEYS:
             runner = run_psl_es
         elif moea_key in TPSL_ES_KEYS:
@@ -557,12 +575,6 @@ class EvoMTLTrainer(Trainer):
             runner = run_dcpsl_es
         elif moea_key in PSL_TASKGUIDE_KEYS:
             runner = run_psl_taskguide
-        elif moea_key in PCD_OPENES_KEYS:
-            runner = run_pcd_openes
-        elif moea_key in PCD_GUIDEDES_KEYS:
-            runner = run_pcd_guidedes
-        elif moea_key in PCD_OPENES_LIBMTL_KEYS:
-            runner = run_pcd_openes_libmtl
         elif moea_key in SC_DE_KEYS:
             runner = run_sc_de
         else:
@@ -581,8 +593,8 @@ class EvoMTLTrainer(Trainer):
     ) -> Dict[str, Any]:
         """Multi-objective evolutionary training from the initial weights (schedule ``evolution``).
 
-        Covers Pareto-front methods (NSGA-II, MOPSO, COMO-CMA, PSL-ES, Tangent PSL-ES, Dual-cone PSL-ES) and single-network ES with
-        Jacobian aggregation (MO-OpenES / UPGrad). The network ends at the weights
+        Covers Pareto-front methods (NSGA-II, MOPSO, COMO-CMA, PSL-ES, Tangent PSL-ES, Dual-cone PSL-ES) and single-network ES
+        (OpenES, GuidedES, SNES, PGPE, MO-UPGrad-OpenES, MO-MGDA-OpenES, ...). The network ends at the weights
         ``pareto_center_X``; see :meth:`_evolution_phase` for the evaluation and checkpoints.
         """
         moea_key = moea.lower()
@@ -613,7 +625,8 @@ class EvoMTLTrainer(Trainer):
         Parameters
         ----------
         moea : str
-            ``"nsga2"``, ``"mopso"`` / ``"mopso_cd"``, ``"comocma"``, ``"mo_openes"``, ``"psl_es"``, ``"tpsl_es"`` or ``"dcpsl_es"``.
+            ``"nsga2"``, ``"mopso"`` / ``"mopso_cd"``, ``"comocma"``, ``"psl_es"``, ``"tpsl_es"``, ``"dcpsl_es"``, or a key
+            of :data:`ES_RUNNERS` (``"openes"``, ``"mo_upgrad_openes"``, ``"mo_mgda_openes"``, ...).
         evo_kwargs : dict
             Passed to the runner of ``moea`` in :mod:`LibMTL.evomtl.moea` (first arg is this trainer).
         """

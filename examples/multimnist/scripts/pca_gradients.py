@@ -1,4 +1,4 @@
-"""PCA trajectories of true vs pseudo-gradients from a MO-OpenES ``gradients.pth.tar``.
+"""PCA trajectories of true vs pseudo-gradients from the ``gradients.pth.tar`` of an OpenES-family run.
 
 The run saves, every ``evo_es_grad_save_freq`` generations from the initialization, the backprop
 gradient and the ES pseudo-gradient of each objective, plus the aggregated ES direction and the
@@ -11,7 +11,7 @@ at every snapshot arrows show the descent direction (-g) of the true gradient an
 pseudo-gradient, projected onto that plane (one panel per objective plus the aggregated direction).
 ``--mode directions``: PCA of the gradient directions themselves, fit on all snapshots of both
 vectors (``--fit both``) or on the true gradients only (``--fit true``).
-``--mode common`` (PCD-OpenES MGDA runs): at a few snapshots, the per-objective descent directions -g_k, their
+``--mode common`` (MO-MGDA-OpenES runs): at a few snapshots, the per-objective descent directions -g_k, their
 mean and MGDA's common direction -G^T alpha in the plane they span (uncentred PCA of the four vectors; exact, since
 both combinations lie in span(g_1, g_2)), for the pseudo-gradients (top) and the true gradients (middle), plus the
 angle between MGDA and the mean and MGDA's weight on objective 1 over all snapshots (bottom). Arrows keep their
@@ -24,6 +24,7 @@ Usage (from examples/multimnist)::
 
 import argparse
 import os
+import re
 
 import matplotlib
 
@@ -145,8 +146,8 @@ def plot_trajectory(d, gens, panels, cmap, norm, args):
         print(f"  {title:38s} share of unit direction in path plane: true {tn.mean():.3f}, pseudo {pn.mean():.3f}")
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.45, 0.93))
-    name = {"upgrad": "MO-OpenES-UPGrad", "mean": "MO-OpenES-WS", "ws": "OpenES"}[d["aggregator"]]
-    if "Guided" in d.get("method", ""):  # Guided ES runs save their own name (GuidedES, MO-GuidedES-UPGRAD, ...)
+    name = {"upgrad": "MO-UPGrad-OpenES", "mean": "MO-Mean-OpenES", "ws": "OpenES"}[d["aggregator"]]
+    if "Guided" in d.get("method", ""):  # Guided ES runs save their own name (GuidedES, MO-UPGrad-GuidedES, ...)
         name = d["method"]
     fig.suptitle(rf"Search trajectory of {name} (N={d['pop_size']}, $\sigma$={d['sigma']:g}, Adam, LR={fmt_lr(d['lr'])})")
     fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=axes.tolist(), label="Generation", shrink=0.75)
@@ -163,8 +164,16 @@ COMMON_STYLE = {"g1": ("#2a78d6", "-"), "g2": ("#eb6834", "-"), "mgda": ("#1baf7
                 "single": ("#e87ba4", ":")}
 
 
+def mgda_variant(method):
+    """MGDA variant of a run name: MO-MGDA-Loss-GuidedES -> MGDA-Loss (old names: PCD-OpenES-MGDA-Loss)."""
+    m = re.fullmatch(r"MO-(.+)-(?:OpenES|GuidedES)(-LibMTL)?", method)
+    if m:
+        return m.group(1) + (m.group(2) or "")
+    return re.split(r"PCD-(?:OpenES|GuidedES)-", method)[-1]
+
+
 def _min_norm_alpha(G):
-    """Two-objective MGDA weights for the rows of G [S, 2, D] (closed form, as in PCD-OpenES)."""
+    """Two-objective MGDA weights for the rows of G [S, 2, D] (closed form, as in MO-MGDA-OpenES)."""
     M = np.einsum("skd,sjd->skj", G, G)
     denom = M[:, 0, 0] + M[:, 1, 1] - 2 * M[:, 0, 1]
     a = np.where(denom > 0, np.clip((M[:, 1, 1] - M[:, 0, 1]) / np.where(denom > 0, denom, 1), 0, 1), 0.5)
@@ -180,14 +189,15 @@ def plot_common(d, gens, args):
     """MGDA's common direction vs the mean of the per-objective gradients (see module docstring)."""
     tasks = d["tasks"]
     pseudo, true = d["pseudo"].double().numpy(), d["true"].double().numpy()
-    applied = "alpha" in d  # PCD-OpenES stepped along MGDA; for MO-OpenES runs alpha is what MGDA would have used
+    applied = "alpha" in d  # MO-MGDA-OpenES stepped along MGDA; for other runs alpha is what MGDA would have used
     rows = {"pseudo": (pseudo, d["alpha"].double().numpy() if applied else _min_norm_alpha(pseudo)),
             "true": (true, d["alpha_true"].double().numpy() if applied else _min_norm_alpha(true))}
     # OpenES on the sum of losses (one fitness value per member): the direction the run stepped along (ascent)
     single = {"pseudo": d["direction"].double().numpy(), "true": d["true_direction"].double().numpy()} \
         if d.get("aggregator") == "ws" else None
-    # PCD-OpenES variants: MGDA, MGDA-Loss (g_k / L_k), MGDA-GN (g_k / |g_k|); the saved gradients are the normalized ones
-    algo = d["method"].split("PCD-OpenES-")[-1] if applied else "MGDA"
+    # MO-MGDA-OpenES variants: MGDA, MGDA-Loss (g_k / L_k), MGDA-GN (g_k / |g_k|); the saved gradients are the
+    # normalized ones. Names: MO-MGDA-Loss-OpenES (runs before the rename: PCD-OpenES-MGDA-Loss)
+    algo = mgda_variant(d["method"]) if applied else "MGDA"
     gk = {"loss": "$-g_{k}/L_{k}$", "l2": "$-g_{k}/\\|g_{k}\\|$", "loss+": "$-g_{k}/(L_{k}\\|g_{k}\\|)$"}.get(
         d.get("grad_norm", "none"), "$-g_{k}$")
     n_snap = min(args.snapshots, len(gens))
@@ -268,7 +278,7 @@ def main():
     p.add_argument("--mode", choices=("trajectory", "directions", "common"), default="trajectory",
                    help="trajectory: path of the search mean with gradient arrows; "
                         "directions: PCA of the gradient directions themselves; "
-                        "common: MGDA's direction vs the mean in the plane of the gradients (PCD-OpenES)")
+                        "common: MGDA's direction vs the mean in the plane of the gradients (MO-MGDA-OpenES)")
     p.add_argument("--snapshots", type=int, default=6, help="common mode: number of snapshots drawn")
     p.add_argument("--fit", choices=("both", "true"), default="both",
                    help="directions mode: fit the PCA on true and pseudo vectors together, or on true only")

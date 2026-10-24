@@ -1,7 +1,9 @@
-"""Convergence plots for MO-OpenES runs, parsed from their stdout logs.
+"""Convergence plots for OpenES-family runs (OpenES, GuidedES, MO-UPGrad-OpenES, MO-Mean-OpenES, their Guided ES
+variants, PSL-ES), parsed from their stdout logs.
 
-Each log is identified by the ``evo_kwargs: {...}`` line that ``main.py`` prints, so the
-aggregator (upgrad / ws), population size and LR come from the run itself. When a
+Each log is identified by the ``moea:`` and ``evo_kwargs: {...}`` lines that ``main.py`` prints, so the
+algorithm (runs before the rename: the ``aggregator`` upgrad / mean / ws), population size and LR come from the
+run itself. When a
 ``metrics.csv`` (written per generation by newer runs) sits next to the log, the curves are read
 from it; older runs are parsed from the log text. Runs that are
 still in progress are plotted up to their latest generation.
@@ -25,7 +27,7 @@ Usage (default paths are relative to examples/multimnist; ``--logs`` / ``--out``
 command line are relative to the current directory)::
 
     python scripts/plot_mo_openes.py
-    python scripts/plot_mo_openes.py --logs "logs/mnist/mo_openes-*/pop_*/lr_*/seed_1/stdout.log" --split_by_pop
+    python scripts/plot_mo_openes.py --logs "logs/mnist/10epochs/mo_upgrad_openes/pop_*/*/seed_1/stdout.log" --split_by_pop
 """
 
 import argparse
@@ -45,7 +47,11 @@ EXAMPLE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # exa
 DEFAULT_LOGS = [
     os.path.join(EXAMPLE_DIR, "logs/mo_openes_test/pop_100_iter_500/*.log"),
     os.path.join(EXAMPLE_DIR, "logs/mnist/mo_openes-*/pop_*/lr_*/seed_*/stdout.log"),
-]
+] + [os.path.join(EXAMPLE_DIR, f"logs/mnist/10epochs/{m}/pop_*/*/seed_*/stdout.log")
+     for m in ("openes", "guidedes", "mo_upgrad_openes", "mo_upgrad_guidedes", "mo_mean_openes")]
+# evo_moea of the OpenES-family runs -> aggregator key of LABELS (Guided ES comes from guided_k)
+ES_AGGREGATORS = {"openes": "ws", "guidedes": "ws", "mo_upgrad_openes": "upgrad", "mo_upgrad_guidedes": "upgrad",
+                  "mo_mean_openes": "mean"}
 LABELS = {"upgrad": "MO-UPGrad-OpenES", "mean": "MO-Mean-OpenES", "ws": "OpenES",
           "psl_tch": "MO-PSL-TCH-OpenES", "psl_ws": "MO-PSL-WS-OpenES",
           "psl_hv": "MO-PSL-HV-OpenES",  # psl_*: evo_moea=psl_es runs
@@ -86,16 +92,19 @@ COS_RE = re.compile(
     r"^\[EvoMTL\] \S+ (\d+)/\d+ .*true_cos=\[([^\]]*)\] dir_cos=([+-]?[\d.]+)"
 )
 DIMS_RE = re.compile(r"dims=(\d+) \| pop=")
+MOEA_RE = re.compile(r"^\s*moea: (\S+)\s*$")
 MEAN_RE = re.compile(r"^\[EvoMTL\] Mean (?:z|theta) TRAIN \(curr batch\) iteration (\d+) \| (.+)$")
 
 
 def parse_log(path):
     """Return a dict with the run's settings, test rows (gen, l1, a1, l2, a2) and train rows (gen, l1, l2)."""
-    cfg, tasks, test, train, cos, dims = None, None, [], {}, [], None
+    cfg, moea, tasks, test, train, cos, dims = None, None, None, [], {}, [], None
     with open(path, errors="replace") as f:
         for line in f:
             line = line.rstrip("\n")
-            if cfg is None and "evo_kwargs:" in line:
+            if moea is None and cfg is None and (m := MOEA_RE.match(line)):
+                moea = m.group(1).replace("-", "_")
+            elif cfg is None and "evo_kwargs:" in line:
                 cfg = ast.literal_eval(line.split("evo_kwargs:", 1)[1].strip())
             elif m := COS_RE.match(line):
                 c1, c2 = (float(x) for x in m.group(2).split(","))
@@ -111,7 +120,8 @@ def parse_log(path):
                 v = [float(x) for x in m.groups()[1:]]
                 test.append((gen, v[4], v[5], v[6], v[7]))
                 train[gen] = (v[0], v[2])
-    if cfg is None or not ("aggregator" in cfg or "scalarization" in cfg or "center_fraction" in cfg):
+    if cfg is None or not (moea in ES_AGGREGATORS or "aggregator" in cfg or "scalarization" in cfg
+                           or "center_fraction" in cfg):
         return None
     d, name = os.path.split(path)  # metrics.csv for stdout.log, <name>_metrics.csv for other logs
     csv_path = os.path.join(d, "metrics.csv" if name == "stdout.log" else os.path.splitext(name)[0] + "_metrics.csv")
@@ -125,7 +135,8 @@ def parse_log(path):
     return {
         # PSL runs log their scalarization instead of an aggregator; Tangent PSL-ES runs also log c0, Dual-cone
         # PSL-ES runs log center_fraction (and neither)
-        "aggregator": "dcpsl_upgrad" if "center_fraction" in cfg else cfg["aggregator"] if "aggregator" in cfg
+        "aggregator": ES_AGGREGATORS[moea] if moea in ES_AGGREGATORS
+        else "dcpsl_upgrad" if "center_fraction" in cfg else cfg["aggregator"] if "aggregator" in cfg
         else ("tpsl_" if "c0" in cfg else "emapsl_" if "b_ema" in cfg else "psl_") + cfg["scalarization"],
         "variant": psl_variant(cfg),
         "pop": int(cfg["pop_size"]), "lr": float(cfg["lr"]),
@@ -267,7 +278,7 @@ def main():
     paths = sorted({f for pattern in args.logs for f in glob.glob(pattern)})
     runs = [r for r in map(parse_log, paths) if r is not None]
     if not runs:
-        raise SystemExit(f"No MO-OpenES logs found for {args.logs}")
+        raise SystemExit(f"No OpenES-family logs found for {args.logs}")
     for r in runs:
         print(f"{label(r):18s} pop={r['pop']:<5d} lr={r['lr']:<7g} "
               f"gen {r['last']}/{r['n_iter']}  {r['path']}")

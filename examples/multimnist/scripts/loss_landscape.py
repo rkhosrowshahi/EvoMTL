@@ -1,4 +1,4 @@
-"""Loss landscape on the PCA plane of a MO-OpenES search trajectory.
+"""Loss landscape on the PCA plane of an OpenES-family (e.g. MO-UPGrad-OpenES) search trajectory.
 
 Reads ``gradients.pth.tar`` (search-mean snapshots) and ``evo_result.pt`` (``theta_0``) from a run
 folder, takes the same PC1-PC2 plane as ``pca_gradients.py`` (via ``path_pca``), and evaluates both

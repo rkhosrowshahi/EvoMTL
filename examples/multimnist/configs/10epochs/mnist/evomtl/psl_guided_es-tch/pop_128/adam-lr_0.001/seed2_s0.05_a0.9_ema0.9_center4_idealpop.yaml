@@ -8,7 +8,7 @@
 # density of their preference lam_1 (80% of the weight on lam_1 in [0.28, 0.72]); the steering matrix B
 # follows all pairs, ranked by Chebyshev scores measured from an ideal point (each task's lowest loss in
 # the population on the batch, minus 0.1) instead of from 0.
-# Guided ES sampling as in MO-GuidedES-UPGrad: the guide is a moving average of past ES directions
+# Guided ES sampling as in MO-UPGrad-GuidedES: the guide is a moving average of past ES directions
 # over (theta, B) (decay 0.9), perturbed with size 0.05 along it; alpha=0.9 of the noise stays isotropic.
 
 # General

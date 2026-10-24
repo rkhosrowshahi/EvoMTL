@@ -1,7 +1,7 @@
 """Pareto front of PSL-OpenES runs vs the single networks of the other ES methods.
 
 A PSL run (``evo_moea=psl_es``, ``tpsl_es`` or ``dcpsl_es``) writes ``front.csv``: the networks ``theta(lam)`` on a grid of
-preferences at every test evaluation. The baselines (MO-OpenES, OpenES, Guided ES variants)
+preferences at every test evaluation. The baselines (MO-UPGrad-OpenES, OpenES, Guided ES variants)
 each end with one network, the ES mean; its final test losses come from ``metrics.csv``.
 
 Writes to ``--out`` (figures as PNG and vector PDF). With one ``--psl`` run the default is that
@@ -21,7 +21,7 @@ Usage (from examples/multimnist)::
 
     python scripts/plot_psl_front.py \\
         --psl logs/mnist/psl_openes-tch/pop_128/adam-lr_1e-3/seed_1 \\
-        --baselines logs/mnist/mo_openes-*/pop_128/adam-lr_1e-3/seed_1
+        --baselines logs/mnist/10epochs/mo_upgrad_openes/pop_128/adam-lr_1e-3/seed_1
 
     python scripts/plot_psl_front.py --psl <PSL run 1> <PSL run 2> --out figures/comparison/psl_fronts-pop_128
 """

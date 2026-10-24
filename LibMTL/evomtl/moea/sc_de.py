@@ -40,7 +40,7 @@ import torch
 
 from .common import configure_moea_random_seed, should_run_full_test
 from .hv import pareto_front_indices
-from .mo_openes import _cosine, make_es_optimizer, true_jacobian
+from .es_common import _cosine, make_es_optimizer, true_jacobian
 
 
 def run_sc_de(
@@ -81,7 +81,7 @@ def run_sc_de(
     num_pairs : int
         Donor pairs ``K`` per generation (the proposal: 1); their oriented differences are averaged.
     lr, optim, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps, sgd_momentum
-        Optimizer on ``mu`` (see :func:`~.mo_openes.make_es_optimizer`), stepped with the pseudo-gradient
+        Optimizer on ``mu`` (see :func:`~.es_common.make_es_optimizer`), stepped with the pseudo-gradient
         ``-Delta~``.
     sigma, sigma_min, sigma_max, sigma_increase, sigma_decrease
         Donor radius; after an accepted / rejected trial it is multiplied by ``sigma_increase`` /

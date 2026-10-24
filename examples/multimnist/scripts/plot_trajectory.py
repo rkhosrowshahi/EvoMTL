@@ -26,7 +26,8 @@ import numpy as np
 
 EXAMPLE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS = os.path.join(EXAMPLE_DIR, "logs/mnist/10epochs")
-ES = [("guided_es-ws", "Guided-ES (WS)"), ("mo_guided_es-upgrad", "MO-Guided-ES (UPGrad)")]
+ES = [("guidedes", "GuidedES"), ("mo_upgrad_guidedes", "MO-UPGrad-GuidedES"),
+      ("guided_es-ws", "GuidedES"), ("mo_guided_es-upgrad", "MO-UPGrad-GuidedES")]  # last two: folders before the rename
 GD_NAMES = {"upgrad": "UPGrad (backprop)", "mgda": "MGDA (backprop)", "ew": "EW (backprop)"}
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]  # categorical slots, fixed order
 GENS_PER_EPOCH = 60000 / 256

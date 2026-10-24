@@ -33,7 +33,7 @@ import torch
 
 from .common import configure_moea_random_seed, should_run_full_test
 from .hv import pareto_front_indices
-from .mo_openes import centered_ranks, make_es_optimizer, true_jacobian
+from .es_common import centered_ranks, make_es_optimizer, true_jacobian
 from .psl_es import (conditioned_indices, hypervolume, preference_features, preference_grid, sample_preferences,
                      scalarize, simplex_basis)
 

@@ -4,7 +4,7 @@
 # Each antithetic pair draws its own preference and is scored with the Chebyshev scalarization
 # max_k lam_k l_k; ES searches (theta, B) and Adam updates both. The balanced network (lam = 0.5, 0.5)
 # is theta; the front is evaluated on lam_1 = 0, 0.1, ..., 1 at every test evaluation.
-# Guided ES sampling as in MO-GuidedES-UPGrad: the guide is a moving average of past ES directions
+# Guided ES sampling as in MO-UPGrad-GuidedES: the guide is a moving average of past ES directions
 # over (theta, B) (decay 0.9), perturbed with size 0.05 along it; alpha=0.9 of the noise stays isotropic.
 
 # General
