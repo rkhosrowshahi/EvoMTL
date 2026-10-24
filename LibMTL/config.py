@@ -140,15 +140,15 @@ _parser.add_argument(
          'and --evo_psl_* flags), or tpsl_es (Tangent PSL-ES: the same family with the steering direction computed '
          'from the per-task gradient estimates and only its length learned; also uses --evo_tpsl_*), or dcpsl_es '
          '(Dual-cone PSL-ES: the same family, the balanced network moved by UPGrad and each corner along its '
-         'dual-cone edge; uses --evo_psl_params, --evo_psl_eval_points, --evo_es_* and --evo_dcpsl_*), or emapsl_es '
-         '(EMA-PSL-ES: B is a moving average of each generation\'s unit tangent; also uses --evo_emapsl_*), or '
+         'dual-cone edge; uses --evo_psl_params, --evo_psl_eval_points, --evo_es_* and --evo_dcpsl_*), or '
          'psl_taskguide (PSL-TaskGuide: B from the per-task pseudo-gradient difference, a monotone Bernstein '
          'preference map, Guided ES in the span of the per-task estimates and the update; two tasks; also uses '
          '--evo_psl_map_*, --evo_psl_steering_ema and --evo_psl_curvature_*), or pcd_openes (Pareto-safe common '
          'descent OpenES: per-objective OpenES pseudo-gradients combined by min-norm MGDA, or by a noise-aware '
          'program; uses the --evo_es_* and --evo_pcd_* flags), or pcd_guidedes (PCD-GuidedES: the same with Guided '
          'ES sampling along past common directions; also uses --evo_es_guided_*), or pcd_openes_libmtl (PCD-OpenES with '
-         'the min-norm solver and gradient normalizers of LibMTL MGDA)',
+         'the min-norm solver and gradient normalizers of LibMTL MGDA), or sc_de (SC-DE: single-centre DE, the centre moved along fitness-oriented donor '
+         'differences by --evo_es_optim at --evo_es_lr; uses --evo_es_sigma and --evo_scde_*)',
 )
 _parser.add_argument('--evo_iterations', type=int, default=30,
                     help='MOEA outer iterations: NSGA-II / MOPSO-CD generations or COMO-CMA-ES iterations')
@@ -303,6 +303,22 @@ _parser.add_argument('--evo_es_sgd_momentum', type=float, default=0.0,
 _parser.add_argument('--evo_es_rmsprop_eps', type=float, default=1e-8, help='MO-OpenES RMSprop epsilon')
 _parser.add_argument('--evo_es_guided_k', type=int, default=0,
                     help='MO-OpenES Guided ES: number of past ES directions spanning the guiding subspace; 0 = off')
+_parser.add_argument('--evo_scde_pairs', type=int, default=1,
+                    help='SC-DE (evo_moea=sc_de): donor pairs per generation (2 * pairs + 2 evaluations); the proposal uses 1')
+_parser.add_argument('--evo_scde_F', type=float, default=0.5, help='SC-DE: differential scaling factor F')
+_parser.add_argument('--evo_scde_cr', type=float, default=0.5, help='SC-DE: binomial crossover rate CR of the step')
+_parser.add_argument('--evo_scde_pair_weight', type=str, default='sign', choices=('sign', 'gap'),
+                    help='SC-DE: oriented differences weighted equally (sign, the proposal) or by their loss gap '
+                         '/ (2 sigma^2) (gap: the two-point gradient estimate)')
+_parser.add_argument('--evo_scde_mirrored', action=argparse.BooleanOptionalAction, default=False,
+                    help='SC-DE: mirrored donor pairs mu +- sigma eps (cancels the curvature term of the loss gap)')
+_parser.add_argument('--evo_scde_greedy', action=argparse.BooleanOptionalAction, default=True,
+                    help='SC-DE: keep the trial centre only if it lowers the loss on the generation mini-batch')
+_parser.add_argument('--evo_scde_sigma_increase', type=float, default=1.0,
+                    help='SC-DE: sigma factor after an accepted trial; 1 = fixed sigma')
+_parser.add_argument('--evo_scde_sigma_decrease', type=float, default=1.0,
+                    help='SC-DE: sigma factor after a rejected trial; 1 = fixed sigma')
+_parser.add_argument('--evo_scde_sigma_max', type=float, default=0.0, help='SC-DE: upper clamp on sigma; 0 = none')
 _parser.add_argument('--evo_es_guided_alpha', type=float, default=0.5,
                     help='MO-OpenES Guided ES: fraction of the noise budget kept isotropic (1 = plain OpenES)')
 _parser.add_argument('--evo_es_guided_sigma', type=float, default=0.0,
@@ -333,11 +349,6 @@ _parser.add_argument('--evo_psl_guide', type=str, default='update', choices=('up
 _parser.add_argument('--evo_psl_rank_groups', type=int, default=1,
                     help='PSL-OpenES: rank the pair differences within this many groups of neighbouring preferences '
                          'instead of across all pairs (1); use > 1 with the hv score')
-_parser.add_argument('--evo_emapsl_b_scale', type=float, default=10.0,
-                    help='EMA-PSL-ES (evo_moea=emapsl_es): maximum length of B, the moving average of this many times '
-                         'the unit tangent of each generation')
-_parser.add_argument('--evo_emapsl_b_ema', type=float, default=0.99,
-                    help='EMA-PSL-ES: decay of the moving average of B')
 _parser.add_argument('--evo_pcd_direction', type=str, default='mgda', choices=('mgda', 'robust'),
                     help='PCD-OpenES (evo_moea=pcd_openes): mgda = min-norm common descent direction of the '
                          'per-objective pseudo-gradients; robust = noise-aware program with the constraints '
@@ -813,6 +824,32 @@ def _make_evo_args(params):
                 'guided_sigma': float(params.evo_es_guided_sigma),
                 'guided_ema': float(params.evo_es_guided_ema),
             })
+    elif moea in ('sc_de', 'sc-de'):  # SC-DE: single-centre DE on the sum of losses
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'num_pairs': int(params.evo_scde_pairs),
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'sigma': float(params.evo_es_sigma),
+            'sigma_min': float(params.evo_es_sigma_min),
+            'sigma_max': float(params.evo_scde_sigma_max),
+            'sigma_increase': float(params.evo_scde_sigma_increase),
+            'sigma_decrease': float(params.evo_scde_sigma_decrease),
+            'F': float(params.evo_scde_F),
+            'CR': float(params.evo_scde_cr),
+            'pair_weight': str(params.evo_scde_pair_weight).strip().lower(),
+            'mirrored': bool(params.evo_scde_mirrored),
+            'greedy': bool(params.evo_scde_greedy),
+            'grad_cos_freq': int(params.evo_es_grad_cos_freq),
+            'lr': float(params.evo_es_lr),
+            'optim': str(params.evo_es_optim),
+            'adam_betas': (float(params.evo_es_adam_beta1), float(params.evo_es_adam_beta2)),
+            'adam_eps': float(params.evo_es_adam_eps),
+            'rmsprop_alpha': float(params.evo_es_rmsprop_alpha),
+            'rmsprop_eps': float(params.evo_es_rmsprop_eps),
+            'sgd_momentum': float(params.evo_es_sgd_momentum),
+        }
     elif moea in ('dcpsl_es', 'dcpsl-es'):
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
@@ -845,7 +882,7 @@ def _make_evo_args(params):
         hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
         if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
             evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
-    elif moea in ('psl_es', 'psl-es', 'tpsl_es', 'tpsl-es', 'emapsl_es', 'emapsl-es'):
+    elif moea in ('psl_es', 'psl-es', 'tpsl_es', 'tpsl-es'):
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
             'pop_size': params.evo_pop_size,
@@ -876,9 +913,6 @@ def _make_evo_args(params):
             'guided_sigma': float(params.evo_es_guided_sigma),
             'guided_ema': float(params.evo_es_guided_ema),
         }
-        if moea.startswith('emapsl'):  # EMA-PSL-ES: B is the moving average of tangents
-            evo_kwargs['b_scale'] = float(params.evo_emapsl_b_scale)
-            evo_kwargs['b_ema'] = float(params.evo_emapsl_b_ema)
         if moea.startswith('tpsl'):  # Tangent PSL-ES: the line length c and the tangent's moving averages
             evo_kwargs['c0'] = float(params.evo_tpsl_c0)
             evo_kwargs['c_lr'] = float(params.evo_tpsl_c_lr)

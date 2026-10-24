@@ -56,22 +56,22 @@ from .moea.mopso import run_mopso
 from .moea.psl_es import run_psl_es
 from .moea.tpsl_es import run_tpsl_es
 from .moea.dcpsl_es import run_dcpsl_es
-from .moea.emapsl_es import run_emapsl_es
 from .moea.psl_taskguide import run_psl_taskguide
 from .moea.nsga2 import run_nsga2
 from .moea.pcd_guidedes import run_pcd_guidedes
 from .moea.pcd_openes import run_pcd_openes
 from .moea.pcd_openes_libmtl import run_pcd_openes_libmtl
+from .moea.sc_de import run_sc_de
 
 MO_OPENES_KEYS = ("mo_openes", "mo-openes", "openes")
 PSL_ES_KEYS = ("psl_es", "psl-es")
 TPSL_ES_KEYS = ("tpsl_es", "tpsl-es")
 DCPSL_ES_KEYS = ("dcpsl_es", "dcpsl-es")
-EMAPSL_ES_KEYS = ("emapsl_es", "emapsl-es")
 PSL_TASKGUIDE_KEYS = ("psl_taskguide", "psl-taskguide", "psl_splitguide", "psl-splitguide")
 PCD_OPENES_KEYS = ("pcd_openes", "pcd-openes")
 PCD_GUIDEDES_KEYS = ("pcd_guidedes", "pcd-guidedes")
 PCD_OPENES_LIBMTL_KEYS = ("pcd_openes_libmtl", "pcd-openes-libmtl")
+SC_DE_KEYS = ("sc_de", "sc-de")
 
 
 class EvoMTLTrainer(Trainer):
@@ -555,8 +555,6 @@ class EvoMTLTrainer(Trainer):
             runner = run_tpsl_es
         elif moea_key in DCPSL_ES_KEYS:
             runner = run_dcpsl_es
-        elif moea_key in EMAPSL_ES_KEYS:
-            runner = run_emapsl_es
         elif moea_key in PSL_TASKGUIDE_KEYS:
             runner = run_psl_taskguide
         elif moea_key in PCD_OPENES_KEYS:
@@ -565,6 +563,8 @@ class EvoMTLTrainer(Trainer):
             runner = run_pcd_guidedes
         elif moea_key in PCD_OPENES_LIBMTL_KEYS:
             runner = run_pcd_openes_libmtl
+        elif moea_key in SC_DE_KEYS:
+            runner = run_sc_de
         else:
             raise ValueError(f"Unknown moea backend: {moea_key}")
         return runner(
