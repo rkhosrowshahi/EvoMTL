@@ -178,6 +178,21 @@ class Trainer(nn.Module):
         self.meter.reinit()
         self.model.train()
 
+    def _wandb_log_init(self, train_dataloaders, test_dataloaders) -> None:
+        """Log the initialized network (full train and test sets) at wandb step 0, before any update.
+
+        Runs under :func:`torch.random.fork_rng`, so iterating the shuffled train loader does not
+        change the batch order of the training that follows.
+        """
+        if not self._wandb_enabled:
+            return
+        self._ensure_hv_minimization_baseline(test_dataloaders)
+        devices = [torch.cuda.current_device()] if torch.cuda.is_available() else []
+        with torch.random.fork_rng(devices=devices):
+            self.test(train_dataloaders, epoch=None, mode='train', wandb_log_step=0, display_tag='init')
+            self.test(test_dataloaders, epoch=None, mode='test', wandb_log_step=0, display_tag='init')
+        self.model.train()
+
     def _wandb_log_epoch_metrics(
         self,
         step: int,
@@ -192,8 +207,12 @@ class Trainer(nn.Module):
 
         prefix = mode
         local_step = int(step)
+        iters_per_epoch = getattr(self, "_wandb_iters_per_epoch", None)
         if global_step:
             wb_step = local_step
+        elif iters_per_epoch:
+            # End of 0-based epoch ``local_step``: (local_step + 1) * T iterations so far.
+            wb_step = (local_step + 1) * int(iters_per_epoch) + int(getattr(self, "_wandb_step_offset", 0))
         else:
             wb_step = local_step + int(getattr(self, "_wandb_step_offset", 0))
 
@@ -388,10 +407,13 @@ class Trainer(nn.Module):
         train_batch = max(train_batch) if self.multi_input else train_batch
         
         self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
+        # wandb step = optimizer iterations: an epoch is ``train_batch`` iterations.
+        self._wandb_iters_per_epoch = int(train_batch)
         self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
         self.model.epochs = epochs
         if self._wandb_enabled:
             self._ensure_hv_minimization_baseline(test_dataloaders)
+        self._wandb_log_init(train_dataloaders, test_dataloaders)
         for epoch in range(epochs):
             self.model.epoch = epoch
             self.model.train()
@@ -457,7 +479,7 @@ class Trainer(nn.Module):
 
     def test(self, test_dataloaders, epoch=None, mode='test', return_improvement=False,
              wandb_log_step=None, *, max_batches=None, random_minibatch=False,
-             display_tag=None, suppress_display=False, return_metrics=False):
+             display_tag=None, suppress_display=False, return_metrics=False, log_wandb=True):
         r'''The test process of multi-task learning.
 
         Args:
@@ -476,6 +498,8 @@ class Trainer(nn.Module):
                 compact combined line printed elsewhere).
             return_metrics (bool): If ``True``, return a snapshot dict with ``loss_item``, ``results``, \
                 ``elapsed`` (mutually exclusive with ``return_improvement``).
+            log_wandb (bool): If ``False``, do not log to wandb (e.g. auxiliary evaluations such as the \
+                networks of a learned Pareto front).
         '''
         if return_improvement and return_metrics:
             raise ValueError("return_improvement and return_metrics cannot both be True.")
@@ -538,7 +562,7 @@ class Trainer(nn.Module):
             }
         if not suppress_display:
             self.meter.display(epoch=epoch, mode=mode, display_tag=display_tag)
-        if self._wandb_enabled:
+        if self._wandb_enabled and log_wandb:
             if epoch is not None:
                 # Same contract as train loop: pass 0-based epoch; offset applied once inside.
                 self._wandb_log_epoch_metrics(int(epoch), mode)
@@ -644,10 +668,13 @@ class Trainer(nn.Module):
         train_batch = int(train_batch / 2)
 
         self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
+        # wandb step = optimizer iterations: an epoch is ``train_batch`` iterations.
+        self._wandb_iters_per_epoch = int(train_batch)
         self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
         self.model.epochs = epochs
         if self._wandb_enabled:
             self._ensure_hv_minimization_baseline(test_dataloaders)
+        self._wandb_log_init(train_dataloaders, test_dataloaders)
         for epoch in range(epochs):
             self.model.epoch = epoch
             self.model.train()

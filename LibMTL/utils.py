@@ -44,8 +44,8 @@ def wandb_metrics_hypervolume(
                     refs.append(b + HV_MIN_BASELINE_EPS)
                 else:
                     refs.append(max(f + 1e-6, 1.0) + 1.0)
-    F = np.atleast_2d(np.asarray(fs, dtype=np.float64))
-    ref_point = np.asarray(refs, dtype=np.float64)
+    F = np.atleast_2d(np.asarray(fs, dtype=np.float32))
+    ref_point = np.asarray(refs, dtype=np.float32)
     if F.size == 0:
         return 0.0
     if np.any(F.ravel() > ref_point):

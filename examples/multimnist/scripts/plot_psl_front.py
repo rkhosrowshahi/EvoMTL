@@ -39,8 +39,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import ListedColormap, Normalize
+from matplotlib.ticker import MaxNLocator
 
-from plot_mo_openes import MARKERS, SKIP_TEST, label, parse_log, save
+from plot_mo_openes import EPOCH_RE, MARKERS, SKIP_TEST, fmt_lr, label, parse_log, save
 
 CHANCE = math.log(10)  # cross-entropy of a uniform guess over 10 digits
 
@@ -81,6 +82,41 @@ def load_run(run_dir):
     return run
 
 
+def read_gd_end(run_dir):
+    """Test losses and accuracies (%) where gradient descent left off (``evo_schedule=gd_then_evolution``).
+
+    The last ``Epoch:`` line of ``stdout.log`` before the switch to evolution; ``None`` for ES-only runs.
+    """
+    last = None
+    with open(os.path.join(run_dir, "stdout.log"), encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.startswith("[EvoMTL] Switching from gradient descent"):
+                if last is None:
+                    return None
+                v = [float(x) for x in last.groups()[1:]]
+                return {"epochs": int(last.group(1)) + 1, "loss": np.array([v[4], v[6]]),
+                        "acc": 100.0 * np.array([v[5], v[7]])}
+            if m := EPOCH_RE.match(line):
+                last = m
+    return None
+
+
+def disambiguate(runs):
+    """Append the settings that differ (LR, sigma) to the names of runs of the same method.
+
+    ``method`` keeps the plain name (marker lookup); ``name`` becomes e.g. ``MO-PSL-TCH-GuidedES (LR=1e-4, sigma=1e-3)``.
+    """
+    for r in runs:
+        r["method"] = r["name"]
+    for name in {r["method"] for r in runs}:
+        same = [r for r in runs if r["method"] == name]
+        if len(same) < 2:
+            continue
+        fields = [(k, txt) for k, txt in (("lr", "LR"), ("sigma", "sigma")) if len({r[k] for r in same}) > 1]
+        for r in same:
+            r["name"] = f"{name} (" + ", ".join(f"{txt}={fmt_lr(r[k])}" for k, txt in fields) + ")"
+
+
 def square_limits(ax, pts):
     """Same range on both axes with equal scaling (a square box in objective space)."""
     lo, hi = float(pts.min()), float(pts.max())
@@ -88,6 +124,16 @@ def square_limits(ax, pts):
     ax.set_xlim(lo - pad, hi + pad)
     ax.set_ylim(lo - pad, hi + pad)
     ax.set_aspect("equal")
+
+
+def zoom_limits(ax, pts):
+    """Each axis fitted to its own range of the points (``--zoom``): small fronts fill the plot."""
+    for i, set_lim in enumerate((ax.set_xlim, ax.set_ylim)):
+        lo, hi = float(pts[:, i].min()), float(pts[:, i].max())
+        pad = 0.08 * (hi - lo) or 1e-3
+        set_lim(lo - pad, hi + pad)
+    ax.xaxis.set_major_locator(MaxNLocator(5))
+    ax.yaxis.set_major_locator(MaxNLocator(6))
 
 
 def main():
@@ -104,17 +150,29 @@ def main():
     p.add_argument("--out", default=None,
                    help="output folder (default with one --psl run: its folder; several runs: required, "
                         "e.g. figures/comparison/<name>)")
+    p.add_argument("--zoom", action="store_true",
+                   help="fit each axis to the plotted points instead of a square box with equal scaling")
+    p.add_argument("--gens", nargs="+", type=int, default=None,
+                   help="front_evolution: plot only these generations (each needs a test evaluation in front.csv), "
+                        "with a legend instead of the generation colour bar")
+    p.add_argument("--gen_labels", nargs="+", default=None,
+                   help="legend labels for --gens, e.g. '8 epochs + 1 step' '9 epochs' '10 epochs'")
     args = p.parse_args()
+    if args.gen_labels is not None and len(args.gen_labels) != len(args.gens or []):
+        raise SystemExit("--gen_labels needs one label per --gens generation")
+    limits = zoom_limits if args.zoom else square_limits
     if args.out is None:
         if len(args.psl) > 1:
             raise SystemExit("several --psl runs: pass --out, e.g. figures/comparison/<name>")
         args.out = args.psl[0]
 
     psl = [load_run(d) for d in args.psl]
+    disambiguate(psl)
     base = [load_run(d) for pat in args.baselines for d in sorted(glob.glob(pat))]
-    base = [r for r in base if not r["aggregator"].startswith(("psl_", "tpsl_", "dcpsl_"))]  # a glob may also catch PSL runs
+    base = [r for r in base if not r["aggregator"].startswith(("psl_", "tpsl_", "dcpsl_", "emapsl_"))]  # a glob may also catch PSL runs
     for r in psl:
         r["fronts"] = read_front(r["dir"])
+        r["gd_end"] = read_gd_end(r["dir"])
     ref = np.array(args.ref)
     t1, t2 = psl[0]["tasks"]
     os.makedirs(args.out, exist_ok=True)
@@ -130,6 +188,12 @@ def main():
                         f"test_loss_{t1}": bal[1], f"test_loss_{t2}": bal[2], "test_loss_total": bal[1] + bal[2],
                         f"test_acc_{t1}": bal[3], f"test_acc_{t2}": bal[4],
                         "hypervolume": hypervolume_2d(F[:, 1:3], ref)})
+        if r["gd_end"] is not None:
+            (l1, l2), (a1, a2) = r["gd_end"]["loss"], r["gd_end"]["acc"] / 100.0
+            summary.append({"method": r["name"], "solution": f"GD end (epoch {r['gd_end']['epochs']})",
+                            "generation": 0, f"test_loss_{t1}": l1, f"test_loss_{t2}": l2,
+                            "test_loss_total": l1 + l2, f"test_acc_{t1}": a1, f"test_acc_{t2}": a2,
+                            "hypervolume": hypervolume_2d(r["gd_end"]["loss"][None], ref)})
     for r in base:
         g, l1, a1, l2, a2 = r["test"][-1]
         r["final_pt"] = np.array([l1, l2])
@@ -168,6 +232,12 @@ def main():
     def point(r):
         return r["final_acc"] if acc else r["final_pt"]
 
+    def gd_point(r):
+        return r["gd_end"]["acc"] if acc else r["gd_end"]["loss"]
+
+    gd_runs = [r for r in psl if r["gd_end"] is not None]
+    gd_label = f"GD end (epoch {gd_runs[0]['gd_end']['epochs']}, start of ES)" if gd_runs else None
+
     def axis_label(k, t):
         return f"Objective {k}: {t} test {word}" + (" (%)" if acc else "")
 
@@ -179,7 +249,7 @@ def main():
     for r, ls, lc in zip(psl, ["solid", "dashed", "dotted", "dashdot"],
                          ["tab:red", "tab:brown", "tab:pink", "tab:purple"]):
         F = r["final"]
-        m = MARKERS.get(r["name"], "*")
+        m = MARKERS.get(r["method"], "*")
         Pf = xy(F)
         ax.plot(Pf[:, 0], Pf[:, 1], color=lc, linestyle=ls, linewidth=1.4, zorder=2)
         ax.scatter(Pf[:, 0], Pf[:, 1], c=lam_cmap(lam_norm(F[:, 0])), marker=m, s=70, edgecolors="k",
@@ -189,12 +259,17 @@ def main():
                    zorder=4)
         ax.plot([], [], marker=m, linestyle=ls, color=lc, markersize=9, label=f"{r['name']} front")
         pts.append(Pf)
+        if r["gd_end"] is not None:  # where gradient descent left off, in the colour of the run's front
+            ax.plot(*gd_point(r), "P", color=lc, markeredgecolor="k", markersize=11, markeredgewidth=0.8, zorder=6)
+            pts.append(gd_point(r)[None])
+    if gd_runs:
+        ax.plot([], [], "P", color="w", markeredgecolor="k", markersize=11, linestyle="none", label=gd_label)
     for r in base:
         m = MARKERS.get(r["name"], "o")
         ax.plot(*point(r), m, color="k", markerfacecolor="none", markersize=9, markeredgewidth=1.3,
                 zorder=5, label=r["name"])
         pts.append(point(r)[None])
-    square_limits(ax, np.concatenate(pts))
+    limits(ax, np.concatenate(pts))
     ax.set_xlabel(axis_label(1, t1))
     ax.set_ylabel(axis_label(2, t2))
     ax.grid(True)
@@ -203,7 +278,8 @@ def main():
     else:
         ax.legend(loc=args.legend, fontsize=8)
     r0 = psl[0]
-    ax.set_title(f"Test-{word} front at generation {r0['final_gen']}\n(N={r0['pop']}, LR={r0['lr']:.0e})".replace("e-0", "e-"))
+    shared = f"N={r0['pop']}" + (f", LR={fmt_lr(r0['lr'])}" if len({r['lr'] for r in psl}) == 1 else "")
+    ax.set_title(f"Test-{word} front at generation {r0['final_gen']}\n({shared})")
     fig.colorbar(ScalarMappable(norm=lam_norm, cmap=lam_cmap), ax=ax, label=r"Preference $\lambda_1$")
     path = os.path.join(args.out, f"front_test{suffix}.png")
     save(fig, path, bbox_inches="tight")
@@ -215,31 +291,47 @@ def main():
     fig, axes = plt.subplots(1, len(psl), figsize=(4.8 * len(psl), 4.4), squeeze=False)
     gen_norm = Normalize(0, max(r["n_iter"] for r in psl))
     for ax, r in zip(axes[0], psl):
-        m = MARKERS.get(r["name"], "*")
+        m = MARKERS.get(r["method"], "*")
         pts = []
-        for g, F in r["fronts"].items():
-            if g <= SKIP_TEST:
-                continue
+        if args.gens:  # selected generations only, each labelled in the legend
+            missing = [g for g in args.gens if g not in r["fronts"]]
+            if missing:
+                raise SystemExit(f"{r['dir']}: no test front at generation(s) {missing}; "
+                                 f"evaluated: {sorted(r['fronts'])}")
+            labels = args.gen_labels or [f"generation {g}" for g in args.gens]
+            shown = [(g, r["fronts"][g], lab) for g, lab in zip(args.gens, labels)]
+        else:
+            shown = [(g, F, None) for g, F in r["fronts"].items() if g > SKIP_TEST]
+        for g, F, lab in shown:
             c = gen_cmap(gen_norm(g))
             Pf = xy(F)
             ax.plot(Pf[:, 0], Pf[:, 1], "-", color=c, linewidth=1.2)
-            ax.scatter(Pf[:, 0], Pf[:, 1], color=c, marker=m, s=22, zorder=3)
+            ax.scatter(Pf[:, 0], Pf[:, 1], color=c, marker=m, s=22 if lab is None else 40, zorder=3)
+            if lab is not None:
+                ax.plot([], [], "-", color=c, marker=m, label=f"{lab} (gen {g})")
             pts.append(Pf)
         for b in base:
             ax.plot(*point(b), MARKERS.get(b["name"], "o"), color="k", markerfacecolor="none", markersize=7,
                     label=b["name"])
             pts.append(point(b)[None])
-        square_limits(ax, np.concatenate(pts))
+        if r["gd_end"] is not None:
+            ax.plot(*gd_point(r), "P", color="tab:cyan", markeredgecolor="k", markersize=10, zorder=5,
+                    linestyle="none", label=gd_label)
+            pts.append(gd_point(r)[None])
+        limits(ax, np.concatenate(pts))
         ax.set_title(r["name"].replace(" (", "\n("), fontsize=10)  # variant on its own line
         ax.set_xlabel(axis_label(1, t1))
         ax.grid(True)
     axes[0, 0].set_ylabel(axis_label(2, t2))
+    if (gd_runs or args.gens) and not base:
+        axes[0, 0].legend(loc="best", fontsize=7)
     if base:
         axes[0, 0].legend(loc="lower left" if acc else "lower right", fontsize=7, title="final ES mean",
                           title_fontsize=7)
     fig.suptitle(f"PSL front over generations (test {word})")
     fig.tight_layout()
-    fig.colorbar(ScalarMappable(norm=gen_norm, cmap=gen_cmap), ax=axes[0].tolist(), label="Generation")
+    if not args.gens:
+        fig.colorbar(ScalarMappable(norm=gen_norm, cmap=gen_cmap), ax=axes[0].tolist(), label="Generation")
     path = os.path.join(args.out, f"front_evolution{suffix}.png")
     save(fig, path, bbox_inches="tight")
     plt.close(fig)

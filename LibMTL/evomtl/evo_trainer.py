@@ -42,6 +42,7 @@ import matplotlib.pyplot as plt
 import wandb
 
 from ..trainer import Trainer
+from .moea.common import epoch_fraction_eval_steps
 from .moea.comocma import run_comocma
 from .moea.hv import (
     marginal_hypervolume_weights,
@@ -55,12 +56,22 @@ from .moea.mopso import run_mopso
 from .moea.psl_es import run_psl_es
 from .moea.tpsl_es import run_tpsl_es
 from .moea.dcpsl_es import run_dcpsl_es
+from .moea.emapsl_es import run_emapsl_es
+from .moea.psl_taskguide import run_psl_taskguide
 from .moea.nsga2 import run_nsga2
+from .moea.pcd_guidedes import run_pcd_guidedes
+from .moea.pcd_openes import run_pcd_openes
+from .moea.pcd_openes_libmtl import run_pcd_openes_libmtl
 
 MO_OPENES_KEYS = ("mo_openes", "mo-openes", "openes")
 PSL_ES_KEYS = ("psl_es", "psl-es")
 TPSL_ES_KEYS = ("tpsl_es", "tpsl-es")
 DCPSL_ES_KEYS = ("dcpsl_es", "dcpsl-es")
+EMAPSL_ES_KEYS = ("emapsl_es", "emapsl-es")
+PSL_TASKGUIDE_KEYS = ("psl_taskguide", "psl-taskguide", "psl_splitguide", "psl-splitguide")
+PCD_OPENES_KEYS = ("pcd_openes", "pcd-openes")
+PCD_GUIDEDES_KEYS = ("pcd_guidedes", "pcd-guidedes")
+PCD_OPENES_LIBMTL_KEYS = ("pcd_openes_libmtl", "pcd-openes-libmtl")
 
 
 class EvoMTLTrainer(Trainer):
@@ -105,6 +116,7 @@ class EvoMTLTrainer(Trainer):
             return super().train(train_dataloaders, test_dataloaders, epochs, val_dataloaders,
                                  return_weight, finish_wandb=finish_wandb, **kwargs)
         schedule = evo_args.get("evo_schedule", "gd_then_evolution")
+        self._evo_eval_per_epoch = int(evo_args.get("evo_eval_per_epoch", 0) or 0)
         evo = dict(
             moea=evo_args["moea"],
             evo_kwargs=dict(evo_args["evo_kwargs"]),
@@ -279,7 +291,7 @@ class EvoMTLTrainer(Trainer):
         """Log one MOEA step under ``evo/`` (shared keys for NSGA-II and COMO-CMA-ES)."""
         if not getattr(self, "_wandb_enabled", False):
             return
-        pf = np.asarray(pareto_front, dtype=np.float64)
+        pf = np.asarray(pareto_front, dtype=np.float32)
         if pf.size == 0:
             pf = pf.reshape(0, int(self.task_num))
         elif pf.ndim == 1:
@@ -319,14 +331,14 @@ class EvoMTLTrainer(Trainer):
         n_obj = int(self.task_num)
         if n_obj < 2:
             return
-        F_pop = np.atleast_2d(np.asarray(population_F, dtype=np.float64))
-        F_pf = np.atleast_2d(np.asarray(pareto_F, dtype=np.float64))
+        F_pop = np.atleast_2d(np.asarray(population_F, dtype=np.float32))
+        F_pf = np.atleast_2d(np.asarray(pareto_F, dtype=np.float32))
         if offspring_F is not None:
-            F_off = np.atleast_2d(np.asarray(offspring_F, dtype=np.float64))
+            F_off = np.atleast_2d(np.asarray(offspring_F, dtype=np.float32))
             if F_off.size == 0:
-                F_off = np.empty((0, n_obj), dtype=np.float64)
+                F_off = np.empty((0, n_obj), dtype=np.float32)
         else:
-            F_off = np.empty((0, n_obj), dtype=np.float64)
+            F_off = np.empty((0, n_obj), dtype=np.float32)
         if (
             F_pop.size == 0
             and F_pf.size == 0
@@ -341,7 +353,7 @@ class EvoMTLTrainer(Trainer):
         if F_off.size and F_off.shape[1] != n_obj:
             return
         if pareto_center_F is not None:
-            c = np.asarray(pareto_center_F, dtype=np.float64).reshape(-1)
+            c = np.asarray(pareto_center_F, dtype=np.float32).reshape(-1)
             if c.size != n_obj:
                 return
         
@@ -388,7 +400,7 @@ class EvoMTLTrainer(Trainer):
                 zorder=3,
             )
         if pareto_center_F is not None:
-            c = np.asarray(pareto_center_F, dtype=np.float64).reshape(-1)
+            c = np.asarray(pareto_center_F, dtype=np.float32).reshape(-1)
             ax.scatter(
                 c[i],
                 c[j],
@@ -442,7 +454,7 @@ class EvoMTLTrainer(Trainer):
         wandb_log_step: Optional[int] = None,
     ) -> None:
         """Print one MOEA step to stdout (mirrors :meth:`_wandb_log_evo_front_metrics`)."""
-        pf = np.asarray(pareto_front, dtype=np.float64)
+        pf = np.asarray(pareto_front, dtype=np.float32)
         if pf.size == 0:
             pf = pf.reshape(0, int(self.task_num))
         elif pf.ndim == 1:
@@ -457,9 +469,9 @@ class EvoMTLTrainer(Trainer):
 
         if offspring_X is not None:
             # displacement of the offspring weights from theta_0
-            X = np.atleast_2d(np.asarray(offspring_X, dtype=np.float64))
+            X = np.atleast_2d(np.asarray(offspring_X, dtype=np.float32))
             if X.size:
-                X = X - self.theta_0.detach().cpu().double().numpy()
+                X = X - self.theta_0.detach().cpu().float().numpy()
                 d_min = float(np.min(X))
                 d_max = float(np.max(X))
                 d_mean = float(np.mean(X))
@@ -503,7 +515,7 @@ class EvoMTLTrainer(Trainer):
         line_label: str = "Pareto front",
     ) -> None:
         """Print mean / min / max of each MOEA objective (training loss) on the Pareto set."""
-        F = np.atleast_2d(np.asarray(pareto_F, dtype=np.float64))
+        F = np.atleast_2d(np.asarray(pareto_F, dtype=np.float32))
         if len(F) == 0:
             print(f"[EvoMTL] {line_label} | (empty)", flush=True)
             return
@@ -543,6 +555,16 @@ class EvoMTLTrainer(Trainer):
             runner = run_tpsl_es
         elif moea_key in DCPSL_ES_KEYS:
             runner = run_dcpsl_es
+        elif moea_key in EMAPSL_ES_KEYS:
+            runner = run_emapsl_es
+        elif moea_key in PSL_TASKGUIDE_KEYS:
+            runner = run_psl_taskguide
+        elif moea_key in PCD_OPENES_KEYS:
+            runner = run_pcd_openes
+        elif moea_key in PCD_GUIDEDES_KEYS:
+            runner = run_pcd_guidedes
+        elif moea_key in PCD_OPENES_LIBMTL_KEYS:
+            runner = run_pcd_openes_libmtl
         else:
             raise ValueError(f"Unknown moea backend: {moea_key}")
         return runner(
@@ -565,6 +587,7 @@ class EvoMTLTrainer(Trainer):
         """
         moea_key = moea.lower()
         print(f"[EvoMTL] Evolutionary training: {moea_key} from the initial weights.", flush=True)
+        self._wandb_log_init(train_dataloaders, test_dataloaders)
         evo_out = self._evolution_phase(train_dataloaders, test_dataloaders, moea_key, evo_kwargs,
                                         wandb_step_offset=1, schedule="evolution")
         self._wandb_finish_if(finish_wandb)
@@ -602,9 +625,11 @@ class EvoMTLTrainer(Trainer):
         w_part = f", weighting={w}" if w is not None else ""
         print(f"[EvoMTL] Switching from gradient descent ({gd_epochs} epoch(s){w_part}) to evolutionary "
               f"fine-tuning: {moea_key}.", flush=True)
-        # After GD, the last wandb step is ``gd_epochs`` (1-based epochs); evolution starts at ``gd_epochs + 1``.
+        # wandb steps count iterations: GD ends at step ``gd_epochs * T`` (T iterations per epoch), and
+        # generation g (1-based) of the evolution logs at ``gd_epochs * T + g``.
+        gd_iterations = int(gd_epochs) * int(getattr(self, "_wandb_iters_per_epoch", None) or 1)
         evo_out = self._evolution_phase(train_dataloaders, test_dataloaders, moea_key, evo_kwargs,
-                                        wandb_step_offset=int(gd_epochs) + 1, schedule="gd_then_evolution")
+                                        wandb_step_offset=gd_iterations + 1, schedule="gd_then_evolution")
         self._wandb_finish_if(finish_wandb)
         return evo_out
 
@@ -628,13 +653,26 @@ class EvoMTLTrainer(Trainer):
         self.prepare_evolution()
 
         evo_kwargs.setdefault("wandb_step_offset", int(wandb_step_offset))
+        per_epoch = int(getattr(self, "_evo_eval_per_epoch", 0) or 0)
+        if per_epoch > 0:
+            # Test passes at fractions of an epoch of T iterations (GD ends on a multiple of T, so the
+            # fractions line up with the global wandb step).
+            # len() of the loaders (not _prepare_dataloaders): no iterator, so no draw from the torch RNG
+            iters = getattr(self, "_wandb_iters_per_epoch", None) or (
+                max(len(d) for d in train_dataloaders.values()) if isinstance(train_dataloaders, dict)
+                else len(train_dataloaders))
+            iters = int(iters)
+            evo_kwargs["evo_eval_freq"] = epoch_fraction_eval_steps(
+                int(evo_kwargs.get("num_iterations", 0)), iters, per_epoch)
+            print(f"[EvoMTL] Test evaluation {per_epoch}x per epoch (T={iters}): generations "
+                  f"{sorted(s + 1 for s in evo_kwargs['evo_eval_freq'])} and the last.", flush=True)
         post_evo_step = int(evo_kwargs["wandb_step_offset"]) + max(0, int(evo_kwargs.get("num_iterations", 0)))
 
         evo_out = self._run_moea(moea_key, train_dataloaders, test_dataloaders, evo_kwargs)
 
         if getattr(self, "_wandb_enabled", False):  # distance of the returned weights from theta_0
-            dc = np.asarray(evo_out["pareto_center_X"], dtype=np.float64).reshape(-1) \
-                - self.theta_0.detach().cpu().double().numpy()
+            dc = np.asarray(evo_out["pareto_center_X"], dtype=np.float32).reshape(-1) \
+                - self.theta_0.detach().cpu().float().numpy()
             self._wandb_log({"evo/final_pareto_center_X_l2": float(np.linalg.norm(dc))}, step=post_evo_step)
 
         # Pareto-center weights are already applied by the runners. COMO-CMA prints ref-cut Pareto

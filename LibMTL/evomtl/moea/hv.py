@@ -25,18 +25,18 @@ def normalize_objectives_for_hv(
     default normalized HV reference ``1.1`` per objective. Custom ``ref_point``
     (raw space) uses the same ``ideal`` / ``scale``.
     """
-    F_nd = np.atleast_2d(np.asarray(F_nd, dtype=np.float64))
+    F_nd = np.atleast_2d(np.asarray(F_nd, dtype=np.float32))
     n, m = F_nd.shape
     if n == 0:
-        return F_nd, np.full(m, 1.1, dtype=np.float64)
+        return F_nd, np.full(m, 1.1, dtype=np.float32)
     ideal = np.min(F_nd, axis=0)
     nadir = np.max(F_nd, axis=0)
     scale = np.where(nadir - ideal > 1e-8, nadir - ideal, 1.0)
     F_norm = (F_nd - ideal) / scale
     if ref_point is None:
-        ref_norm = np.full(m, 1.1, dtype=np.float64)
+        ref_norm = np.full(m, 1.1, dtype=np.float32)
     else:
-        ref = np.asarray(ref_point, dtype=np.float64).reshape(m)
+        ref = np.asarray(ref_point, dtype=np.float32).reshape(m)
         ref_norm = (ref - ideal) / scale
     return F_norm, ref_norm
 
@@ -61,7 +61,7 @@ def pareto_center_weights_from_marginal_hv(
     * ``softmax``: ``exp((c/temp) - max(c/temp))`` normalized (same as
       ``hv_normalized_softmax_center``).
     """
-    contributions = np.asarray(contributions, dtype=np.float64).reshape(-1)
+    contributions = np.asarray(contributions, dtype=np.float32).reshape(-1)
     n = contributions.shape[0]
     if n == 0:
         return np.zeros(0)
@@ -121,7 +121,7 @@ def marginal_hypervolume_weights(
     elif ref_point is None:
         ref_point = default_hv_ref_point(F_nd)
     else:
-        ref_point = np.asarray(ref_point, dtype=np.float64).reshape(m)
+        ref_point = np.asarray(ref_point, dtype=np.float32).reshape(m)
 
     hv = Hypervolume(ref_point=ref_point)
     if n == 0:
@@ -145,7 +145,7 @@ def marginal_hypervolume_weights(
 
 def pareto_center_from_weights(X_nd: np.ndarray, weights: np.ndarray) -> np.ndarray:
     """Weighted average of rows of ``X_nd``."""
-    w = np.asarray(weights, dtype=np.float64).reshape(-1)
+    w = np.asarray(weights, dtype=np.float32).reshape(-1)
     X_nd = np.atleast_2d(X_nd)
     return np.sum(X_nd * w[:, None], axis=0)
 

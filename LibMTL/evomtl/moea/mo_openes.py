@@ -107,12 +107,13 @@ def make_es_optimizer(
     adam_eps: float = 1e-8,
     rmsprop_alpha: float = 0.99,
     rmsprop_eps: float = 1e-8,
+    sgd_momentum: float = 0.0,
 ) -> torch.optim.Optimizer:
-    """Optimizer on the search mean ``theta``: ``sgd``, ``adam`` or ``rmsprop``."""
+    """Optimizer on the search mean ``theta``: ``sgd`` (heavy-ball momentum ``sgd_momentum``), ``adam`` or ``rmsprop``."""
     if optim == "adam":
         return torch.optim.Adam(params, lr=float(lr), betas=tuple(adam_betas), eps=float(adam_eps))
     if optim == "sgd":  # plain SGD on theta (evosax OpenES / GuidedES default optimizer)
-        return torch.optim.SGD(params, lr=float(lr))
+        return torch.optim.SGD(params, lr=float(lr), momentum=float(sgd_momentum))
     if optim == "rmsprop":
         return torch.optim.RMSprop(params, lr=float(lr), alpha=float(rmsprop_alpha), eps=float(rmsprop_eps))
     raise ValueError(f"Unknown ES optimizer {optim!r}; options: sgd, adam, rmsprop")
@@ -222,6 +223,7 @@ def run_mo_openes(
     adam_eps: float = 1e-8,
     rmsprop_alpha: float = 0.99,
     rmsprop_eps: float = 1e-8,
+    sgd_momentum: float = 0.0,
     upgrad_norm_eps: float = 1e-4,
     upgrad_reg_eps: float = 1e-4,
     num_batches: int = 1,
@@ -336,7 +338,7 @@ def run_mo_openes(
     theta = theta_0.clone()
     theta.requires_grad_(True)
     optim = str(optim).strip().lower()
-    optimizer = make_es_optimizer([theta], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps)
+    optimizer = make_es_optimizer([theta], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps, sgd_momentum)
     sigma = float(sigma)
     if sigma_adapt != "none":  # one step size per parameter, all starting at sigma
         sigma = torch.full((n_var,), sigma, dtype=torch.float32)
@@ -399,7 +401,7 @@ def run_mo_openes(
 
         # evaluate every member on the same mini-batch(es)
         shared_batches = trainer._sample_batches(train_dataloaders, num_batches)
-        F = np.zeros((pop_size, n_obj), dtype=np.float64)
+        F = np.zeros((pop_size, n_obj), dtype=np.float32)
         for i in range(pop_size):
             trainer.set_theta(population[i])
             F[i] = trainer.evaluate_multiobjective_losses(
@@ -516,7 +518,7 @@ def run_mo_openes(
             trainer._wandb_log_evo_objective_plot(
                 population_F=F,
                 pareto_F=pareto_front,
-                pareto_center_F=np.asarray(train_batch_metrics["loss_item"], dtype=np.float64),
+                pareto_center_F=np.asarray(train_batch_metrics["loss_item"], dtype=np.float32),
                 step=step,
             )
         if test_dataloaders is not None and run_eval:
@@ -586,7 +588,7 @@ def run_mo_openes(
         "population_X": population_X,
         "hv_weights": None,
         "pareto_center_X": theta_X,
-        "hv_ref_point": None if hv_ref_point is None else np.asarray(hv_ref_point, dtype=np.float64),
+        "hv_ref_point": None if hv_ref_point is None else np.asarray(hv_ref_point, dtype=np.float32),
         "hv_center_aggregation": None,
         "hv_softmax_temperature": None,
         "sigma": sigma.numpy() if isinstance(sigma, torch.Tensor) else sigma,

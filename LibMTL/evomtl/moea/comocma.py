@@ -55,7 +55,7 @@ def run_comocma(
 
     configure_moea_random_seed(seed)
 
-    theta_0 = trainer.theta_0.detach().cpu().double().tolist()
+    theta_0 = trainer.theta_0.detach().cpu().float().tolist()
     x_starts = [list(theta_0) for _ in range(int(num_kernels))]
     inopts = dict(cma_opts or {})
     xl, xu = theta_box(trainer, lb, ub)
@@ -74,7 +74,7 @@ def run_comocma(
     for iteration in range(num_iterations):
         t0 = time.perf_counter()
         solutions = moes.ask("all")
-        solutions_X = np.asarray(solutions, dtype=np.float64)
+        solutions_X = np.asarray(solutions, dtype=np.float32)
         shared_batches = trainer._sample_batches(train_dataloaders, num_batches)
         solution_objectives: List[List[float]] = []
         for x in solutions:
@@ -84,9 +84,9 @@ def run_comocma(
             )
             solution_objectives.append([float(L[0]), float(L[1])])
         moes.tell(solutions, solution_objectives)
-        solutions_F = np.asarray(solution_objectives, dtype=np.float64)
-        pareto_front_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
-        pareto_set_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
+        solutions_F = np.asarray(solution_objectives, dtype=np.float32)
+        pareto_front_cut = np.asarray(moes.pareto_front_cut, dtype=np.float32)
+        pareto_set_cut = np.asarray(moes.pareto_set_cut, dtype=np.float32)
 
         elapsed = time.perf_counter() - t0
         wandb_iteration_extras: Optional[Dict[str, Any]] = None
@@ -132,7 +132,7 @@ def run_comocma(
                 shared_batches
             )
             center_objectives_F = np.asarray(
-                train_batch_metrics["loss_item"], dtype=np.float64
+                train_batch_metrics["loss_item"], dtype=np.float32
             )
             run_test = test_dataloaders is not None and should_run_full_test(
                 iteration, num_iterations, evo_eval_freq
@@ -169,8 +169,8 @@ def run_comocma(
                 step=wandb_step_offset + iteration,
             )
 
-    pareto_front_cut = np.asarray(moes.pareto_front_cut, dtype=np.float64)
-    pareto_set_cut = np.asarray(moes.pareto_set_cut, dtype=np.float64)
+    pareto_front_cut = np.asarray(moes.pareto_front_cut, dtype=np.float32)
+    pareto_set_cut = np.asarray(moes.pareto_set_cut, dtype=np.float32)
     if len(pareto_front_cut) == 0:
         raise RuntimeError("comocma returned an empty Pareto front.")
 
@@ -192,7 +192,7 @@ def run_comocma(
         "pareto_X": pareto_set_cut,
         "hv_weights": hv_weights,
         "pareto_center_X": pareto_center_X,
-        "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
+        "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float32),
         "hv_center_aggregation": hv_center_aggregation,
         "hv_softmax_temperature": float(hv_softmax_temperature),
         "reference_point": reference_point,

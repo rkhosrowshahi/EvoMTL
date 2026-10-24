@@ -319,7 +319,7 @@ def run_psl_es(
     grid = preference_grid(K, eval_points)
     grid_phi = preference_features(grid, Q)
     balanced_phi = torch.zeros(C, dtype=torch.float32)  # phi(1/K) = 0
-    ref = None if hv_ref_point is None else np.asarray(hv_ref_point, dtype=np.float64).reshape(K)
+    ref = None if hv_ref_point is None else np.asarray(hv_ref_point, dtype=np.float32).reshape(K)
 
     def theta_at(xv: torch.Tensor, phi: torch.Tensor) -> torch.Tensor:
         """Weights ``theta + S B phi`` of the network for preference features ``phi`` (``[C]``)."""
@@ -335,7 +335,7 @@ def run_psl_es(
             out["train"].append(trainer.metrics_snapshot_from_prefetched_batches(batches))
             if test_dataloaders is not None:
                 out["test"].append(trainer.test(test_dataloaders, epoch=None, mode="test",
-                                                suppress_display=True, return_metrics=True))
+                                                suppress_display=True, return_metrics=True, log_wandb=False))
         return out
 
     print(
@@ -375,7 +375,7 @@ def run_psl_es(
         front_writer = csv.DictWriter(front_file, fieldnames=front_cols)
         front_writer.writeheader()
 
-    F = np.zeros((pop_size, K), dtype=np.float64)
+    F = np.zeros((pop_size, K), dtype=np.float32)
     shared_batches: list = []
     for iteration in range(num_iterations):
         t0 = time.perf_counter()
@@ -492,7 +492,7 @@ def run_psl_es(
                 train_batch_metrics, test_metrics, epoch_label=iteration + 1
             )
             front = evaluate_front(xd, shared_batches)
-            test_F = np.array([m["loss_item"] for m in front["test"]], dtype=np.float64)
+            test_F = np.array([m["loss_item"] for m in front["test"]], dtype=np.float32)
             if ref is not None:
                 test_hv = hypervolume(test_F, ref)
             picks = sorted({0, len(grid) // 2, len(grid) - 1})
@@ -546,9 +546,9 @@ def run_psl_es(
     xd = x.detach()
     front = evaluate_front(xd, shared_batches)
     grid_X = torch.stack([theta_at(xd, grid_phi[g]) for g in range(len(grid))]).numpy()
-    train_F = np.array([m["loss_item"] for m in front["train"]], dtype=np.float64)
-    test_F = np.array([m["loss_item"] for m in front["test"]], dtype=np.float64).reshape(-1, K)
-    test_acc = np.array([[m["results"][t][0] for t in tasks] for m in front["test"]], dtype=np.float64).reshape(-1, K)
+    train_F = np.array([m["loss_item"] for m in front["train"]], dtype=np.float32)
+    test_F = np.array([m["loss_item"] for m in front["test"]], dtype=np.float32).reshape(-1, K)
+    test_acc = np.array([[m["results"][t][0] for t in tasks] for m in front["test"]], dtype=np.float32).reshape(-1, K)
     if getattr(trainer, "save_path", None):
         torch.save({
             "theta": xd[:D].clone(),                # weights of the balanced network

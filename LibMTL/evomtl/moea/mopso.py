@@ -125,13 +125,13 @@ def run_mopso(
             shared_batches
         )
         population_F = np.atleast_2d(
-            np.asarray(algorithm.pop.get("F"), dtype=np.float64)
+            np.asarray(algorithm.pop.get("F"), dtype=np.float32)
         )
         if should_run_full_test(iteration, num_iterations, evo_eval_freq):
             trainer._wandb_log_evo_objective_plot(
                 population_F=population_F,
-                pareto_F=np.asarray(pareto_front, dtype=np.float64),
-                pareto_center_F=np.asarray(train_batch_metrics["loss_item"], dtype=np.float64),
+                pareto_F=np.asarray(pareto_front, dtype=np.float32),
+                pareto_center_F=np.asarray(train_batch_metrics["loss_item"], dtype=np.float32),
                 step=wandb_step_offset + iteration,
             )
         run_test = test_dataloaders is not None and should_run_full_test(
@@ -194,7 +194,7 @@ def run_mopso(
         "population_X": X_all,
         "hv_weights": hv_weights,
         "pareto_center_X": pareto_center_X,
-        "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float64),
+        "hv_ref_point": np.asarray(hv_ref_point, dtype=np.float32),
         "hv_center_aggregation": hv_center_aggregation,
         "hv_softmax_temperature": float(hv_softmax_temperature),
     }

@@ -11,7 +11,7 @@ def theta_box(trainer: Any, lb: float, ub: float) -> Tuple[np.ndarray, np.ndarra
     """Box ``theta_0 + [lb, ub]`` (per weight) searched by the bounded MOEAs (NSGA-II, MOPSO-CD, COMO-CMA)."""
     if trainer.theta_0 is None:
         raise RuntimeError("prepare_evolution() first.")
-    theta_0 = trainer.theta_0.detach().cpu().double().numpy()
+    theta_0 = trainer.theta_0.detach().cpu().float().numpy()
     return theta_0 + float(lb), theta_0 + float(ub)
 
 
@@ -25,13 +25,16 @@ def configure_moea_random_seed(seed: int) -> None:
     np.random.seed(int(seed))
 
 
-def should_run_full_test(step_idx: int, n_steps: int, every: int) -> bool:
+def should_run_full_test(step_idx: int, n_steps: int, every: Any) -> bool:
     """Whether to run a full test pass this MOEA outer step.
 
     ``every <= 0`` disables in-loop test evaluation (train-snapshot logging only).
     ``every >= 1`` runs test on steps ``0, every, 2*every, ...`` and always on the
-    last step ``n_steps - 1``.
+    last step ``n_steps - 1``. A set of step indices (from :func:`epoch_fraction_eval_steps`)
+    runs test on exactly those steps and the last one.
     """
+    if isinstance(every, (set, frozenset)):
+        return int(step_idx) in every or int(step_idx) == int(n_steps) - 1
     if every <= 0:
         return False
     n_steps = int(n_steps)
@@ -40,6 +43,24 @@ def should_run_full_test(step_idx: int, n_steps: int, every: int) -> bool:
     step_idx = int(step_idx)
     every = int(every)
     return (step_idx % every == 0) or (step_idx == n_steps - 1)
+
+
+def epoch_fraction_eval_steps(n_steps: int, iters_per_epoch: int, per_epoch: int) -> frozenset:
+    """Step indices (0-based) with a test pass ``per_epoch`` times per epoch of ``iters_per_epoch`` iterations.
+
+    Generation ``g = step + 1`` is evaluated when it first reaches ``k * iters_per_epoch / per_epoch``
+    (k = 1, 2, ...): with ``per_epoch = 2`` and T iterations per epoch, at T/2 (rounded up) and T of
+    every epoch. The first step is always included (the front right after the start of evolution).
+    """
+    steps = {0}
+    k = 1
+    while True:
+        g = (k * iters_per_epoch + per_epoch - 1) // per_epoch  # ceil(k * T / per_epoch)
+        if g > n_steps:
+            break
+        steps.add(g - 1)
+        k += 1
+    return frozenset(steps)
 
 
 def inject_pareto_center_into_pop(
@@ -61,10 +82,10 @@ def inject_pareto_center_into_pop(
     pop = algorithm.pop
     if pop is None or len(pop) == 0:
         return None
-    pop_X = np.asarray(pop.get("X"), dtype=np.float64, copy=True)
-    pop_F = np.asarray(pop.get("F"), dtype=np.float64, copy=True)
-    center_x = np.asarray(pareto_center_X, dtype=np.float64).reshape(-1)
-    pareto_center_f = np.asarray(pareto_center_F, dtype=np.float64).reshape(-1)
+    pop_X = np.asarray(pop.get("X"), dtype=np.float32, copy=True)
+    pop_F = np.asarray(pop.get("F"), dtype=np.float32, copy=True)
+    center_x = np.asarray(pareto_center_X, dtype=np.float32).reshape(-1)
+    pareto_center_f = np.asarray(pareto_center_F, dtype=np.float32).reshape(-1)
     if center_x.shape[0] != pop_X.shape[1] or pareto_center_f.shape[0] != pop_F.shape[1]:
         return None
     j = int(np.argmax(np.sum(pop_F, axis=1)))
@@ -79,8 +100,8 @@ def inject_pareto_center_into_pop(
 
     pbest = getattr(algorithm, "pbest", None)
     if pbest is not None and len(pbest) == len(pop):
-        pX = np.asarray(pbest.get("X"), dtype=np.float64, copy=True)
-        pF = np.asarray(pbest.get("F"), dtype=np.float64, copy=True)
+        pX = np.asarray(pbest.get("X"), dtype=np.float32, copy=True)
+        pF = np.asarray(pbest.get("F"), dtype=np.float32, copy=True)
         pX[j] = center_x
         pF[j] = pareto_center_f
         pbest.set("X", pX)

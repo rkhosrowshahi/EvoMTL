@@ -51,7 +51,9 @@ LABELS = {"upgrad": "MO-UPGrad-OpenES", "mean": "MO-Mean-OpenES", "ws": "OpenES"
           "psl_hv": "MO-PSL-HV-OpenES",  # psl_*: evo_moea=psl_es runs
           "tpsl_tch": "MO-TPSL-TCH-OpenES", "tpsl_ws": "MO-TPSL-WS-OpenES",
           "tpsl_hv": "MO-TPSL-HV-OpenES",  # tpsl_*: evo_moea=tpsl_es runs (Tangent PSL-ES)
-          "dcpsl_upgrad": "MO-DCPSL-UPGrad-OpenES"}  # evo_moea=dcpsl_es runs (Dual-cone PSL-ES)
+          "dcpsl_upgrad": "MO-DCPSL-UPGrad-OpenES",
+          "emapsl_tch": "MO-EMAPSL-TCH-OpenES", "emapsl_ws": "MO-EMAPSL-WS-OpenES",
+          "emapsl_hv": "MO-EMAPSL-HV-OpenES"}  # evo_moea=emapsl_es runs (EMA-PSL-ES)  # evo_moea=dcpsl_es runs (Dual-cone PSL-ES)
 
 # Objective-space marker and line style per method (also used by plot_psl_front.py)
 MARKERS = {"MO-UPGrad-OpenES": "o", "MO-Mean-OpenES": "s", "OpenES": "^",
@@ -124,9 +126,10 @@ def parse_log(path):
         # PSL runs log their scalarization instead of an aggregator; Tangent PSL-ES runs also log c0, Dual-cone
         # PSL-ES runs log center_fraction (and neither)
         "aggregator": "dcpsl_upgrad" if "center_fraction" in cfg else cfg["aggregator"] if "aggregator" in cfg
-        else ("tpsl_" if "c0" in cfg else "psl_") + cfg["scalarization"],
+        else ("tpsl_" if "c0" in cfg else "emapsl_" if "b_ema" in cfg else "psl_") + cfg["scalarization"],
         "variant": psl_variant(cfg),
         "pop": int(cfg["pop_size"]), "lr": float(cfg["lr"]),
+        "sigma": float(cfg["sigma"]) if "sigma" in cfg else None,
         "guided": int(cfg.get("guided_k", 0)) > 0,
         "n_iter": n_iter, "last": last, "tasks": tasks or ["objective 1", "objective 2"],
         "test": test, "train": train, "path": path,
@@ -163,6 +166,8 @@ def psl_variant(cfg):
         parts.append({"ideal": "ideal", "hv": "HV"}[spread])
     if cfg.get("psl_guide", "update") == "tasks":
         parts.append("task guide")
+    if "b_ema" in cfg:  # EMA-PSL-ES: the length cap of B
+        parts.append(f"B scale {cfg['b_scale']:g}")
     if "c0" in cfg and not cfg.get("brake", False):  # Tangent PSL-ES without the brake on c (runs before it existed too)
         parts.append("no brake")
     if "center_fraction" in cfg and not cfg.get("normalize", True):  # Dual-cone PSL-ES with raw UPGrad

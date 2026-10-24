@@ -140,7 +140,15 @@ _parser.add_argument(
          'and --evo_psl_* flags), or tpsl_es (Tangent PSL-ES: the same family with the steering direction computed '
          'from the per-task gradient estimates and only its length learned; also uses --evo_tpsl_*), or dcpsl_es '
          '(Dual-cone PSL-ES: the same family, the balanced network moved by UPGrad and each corner along its '
-         'dual-cone edge; uses --evo_psl_params, --evo_psl_eval_points, --evo_es_* and --evo_dcpsl_*)',
+         'dual-cone edge; uses --evo_psl_params, --evo_psl_eval_points, --evo_es_* and --evo_dcpsl_*), or emapsl_es '
+         '(EMA-PSL-ES: B is a moving average of each generation\'s unit tangent; also uses --evo_emapsl_*), or '
+         'psl_taskguide (PSL-TaskGuide: B from the per-task pseudo-gradient difference, a monotone Bernstein '
+         'preference map, Guided ES in the span of the per-task estimates and the update; two tasks; also uses '
+         '--evo_psl_map_*, --evo_psl_steering_ema and --evo_psl_curvature_*), or pcd_openes (Pareto-safe common '
+         'descent OpenES: per-objective OpenES pseudo-gradients combined by min-norm MGDA, or by a noise-aware '
+         'program; uses the --evo_es_* and --evo_pcd_* flags), or pcd_guidedes (PCD-GuidedES: the same with Guided '
+         'ES sampling along past common directions; also uses --evo_es_guided_*), or pcd_openes_libmtl (PCD-OpenES with '
+         'the min-norm solver and gradient normalizers of LibMTL MGDA)',
 )
 _parser.add_argument('--evo_iterations', type=int, default=30,
                     help='MOEA outer iterations: NSGA-II / MOPSO-CD generations or COMO-CMA-ES iterations')
@@ -158,6 +166,14 @@ _parser.add_argument(
     default=1,
     help='during MOEA, run full test set every N generations/iterations (pymoo MOEAs/COMO-CMA); '
          '1=every step. Also runs on the last step. 0=skip test during MOEA (train snapshot only).',
+)
+_parser.add_argument(
+    '--evo_eval_per_epoch',
+    type=int,
+    default=0,
+    help='if > 0, replaces --evo_eval_freq: full test this many times per epoch of T train batches, '
+         'e.g. 2 = at T/2 and T of every epoch (one generation = one iteration), plus the first and last '
+         'generation.',
 )
 _parser.add_argument('--evo_seed', type=int, default=0, help='MOEA random seed (pymoo MOEAs; CMA seed for comocma)')
 _parser.add_argument(
@@ -282,6 +298,8 @@ _parser.add_argument('--evo_es_adam_beta2', type=float, default=0.999, help='MO-
 _parser.add_argument('--evo_es_adam_eps', type=float, default=1e-8, help='MO-OpenES Adam epsilon')
 _parser.add_argument('--evo_es_rmsprop_alpha', type=float, default=0.99,
                     help='MO-OpenES RMSprop smoothing constant for the squared-gradient average')
+_parser.add_argument('--evo_es_sgd_momentum', type=float, default=0.0,
+                    help='MO-OpenES / PCD-OpenES (evo_es_optim sgd): heavy-ball momentum on the search mean; 0 = plain SGD')
 _parser.add_argument('--evo_es_rmsprop_eps', type=float, default=1e-8, help='MO-OpenES RMSprop epsilon')
 _parser.add_argument('--evo_es_guided_k', type=int, default=0,
                     help='MO-OpenES Guided ES: number of past ES directions spanning the guiding subspace; 0 = off')
@@ -315,6 +333,54 @@ _parser.add_argument('--evo_psl_guide', type=str, default='update', choices=('up
 _parser.add_argument('--evo_psl_rank_groups', type=int, default=1,
                     help='PSL-OpenES: rank the pair differences within this many groups of neighbouring preferences '
                          'instead of across all pairs (1); use > 1 with the hv score')
+_parser.add_argument('--evo_emapsl_b_scale', type=float, default=10.0,
+                    help='EMA-PSL-ES (evo_moea=emapsl_es): maximum length of B, the moving average of this many times '
+                         'the unit tangent of each generation')
+_parser.add_argument('--evo_emapsl_b_ema', type=float, default=0.99,
+                    help='EMA-PSL-ES: decay of the moving average of B')
+_parser.add_argument('--evo_pcd_direction', type=str, default='mgda', choices=('mgda', 'robust'),
+                    help='PCD-OpenES (evo_moea=pcd_openes): mgda = min-norm common descent direction of the '
+                         'per-objective pseudo-gradients; robust = noise-aware program with the constraints '
+                         'g_j.d + kappa sqrt(d^T Sigma_j d) <= -s')
+_parser.add_argument('--evo_pcd_gramian', type=str, default='raw', choices=('raw', 'debiased'),
+                    help='PCD-OpenES (mgda): Gramian of the min-norm problem: raw = G G^T of the pseudo-gradients; '
+                         'debiased = unbiased estimate of the true Gramian (removes the estimation-noise term)')
+_parser.add_argument('--evo_pcd_gramian_ema', type=float, default=0.0,
+                    help='PCD-OpenES (mgda): decay of a moving average of the Gramian across generations; 0 = off')
+_parser.add_argument('--evo_pcd_grad_norm', type=str, default='none', choices=('none', 'loss', 'l2', 'loss+'),
+                    help='PCD-OpenES: divide each pseudo-gradient by its loss (loss), norm (l2) or both (loss+) before the '
+                         'direction is computed, as LibMTL MGDA mgda_gn; none = raw')
+_parser.add_argument('--evo_pcd_kappa', type=float, default=1.0,
+                    help='PCD-OpenES (robust): conservativeness kappa, weight of the pseudo-gradient uncertainty')
+_parser.add_argument('--evo_pcd_lambda', type=float, default=1.0,
+                    help='PCD-OpenES (robust): penalty lambda/2 ||d||^2 (1 = MGDA scale at kappa 0)')
+_parser.add_argument('--evo_pcd_trust_radius', type=float, default=1.0,
+                    help='PCD-OpenES (robust): ||d|| <= this times the largest pseudo-gradient norm; <= 0 disables')
+_parser.add_argument('--evo_pcd_stationary_tol', type=float, default=0.05,
+                    help='PCD-OpenES (mgda): flag a generation Pareto-stationary when ||d|| <= this times the '
+                         'largest pseudo-gradient norm')
+_parser.add_argument('--evo_psl_map_degree', type=int, default=3,
+                    help='PSL-TaskGuide (evo_moea=psl_taskguide): degree of the monotone Bernstein preference map '
+                         '(its number of shape variables)')
+_parser.add_argument('--evo_psl_map_init_width', type=float, default=0.02,
+                    help='PSL-TaskGuide: initial half-width exp(w) of the preference map')
+_parser.add_argument('--evo_psl_map_sigma', type=float, default=0.1,
+                    help='PSL-TaskGuide: noise scale of the map shape variables u (0: --evo_es_sigma)')
+_parser.add_argument('--evo_psl_map_width_sigma', type=float, default=0.2,
+                    help='PSL-TaskGuide: noise scale of the map log width w (0: that of u)')
+_parser.add_argument('--evo_psl_map_lr', type=float, default=0.01,
+                    help='PSL-TaskGuide: learning rate of the map variables (w, u) (0: --evo_es_lr)')
+_parser.add_argument('--evo_psl_steering_ema', type=float, default=0.9,
+                    help='PSL-TaskGuide: decay of the moving averages of the per-task pseudo-gradients that give the '
+                         'steering direction and the guiding subspace')
+_parser.add_argument('--evo_psl_curvature_step', type=float, default=0.1,
+                    help='PSL-TaskGuide: finite-difference step for the curvature along the steering direction '
+                         '(B = B_hat / sqrt(curvature)); 0 disables the curvature scaling')
+_parser.add_argument('--evo_psl_curvature_ema', type=float, default=0.9,
+                    help='PSL-TaskGuide: decay of the moving average of the log curvature')
+_parser.add_argument('--evo_psl_ablation', type=str, default='none', choices=('none', 'balanced'),
+                    help='PSL-TaskGuide: balanced evaluates every pair at lam = 1/K (Guided ES on the balanced score '
+                         'with the same subspace, no front)')
 _parser.add_argument('--evo_tpsl_c0', type=float, default=0.1,
                     help='Tangent PSL-ES (evo_moea=tpsl_es): initial length c of the line theta +- c T, the distance of '
                          'the end preferences from theta')
@@ -602,7 +668,7 @@ def _evo_two_floats_or_none(seq) -> Optional[np.ndarray]:
         raise ValueError(
             'Expected exactly two objectives for reference point, got {!r}'.format(seq)
         )
-    return np.asarray([float(seq[0]), float(seq[1])], dtype=np.float64)
+    return np.asarray([float(seq[0]), float(seq[1])], dtype=np.float32)
 
 
 def _make_evo_args(params):
@@ -703,12 +769,50 @@ def _make_evo_args(params):
             'adam_eps': float(params.evo_es_adam_eps),
             'rmsprop_alpha': float(params.evo_es_rmsprop_alpha),
             'rmsprop_eps': float(params.evo_es_rmsprop_eps),
+            'sgd_momentum': float(params.evo_es_sgd_momentum),
             'guided_alpha': float(params.evo_es_guided_alpha),
             'guided_sigma': float(params.evo_es_guided_sigma),
             'guided_ema': float(params.evo_es_guided_ema),
             'upgrad_norm_eps': float(params.upgrad_norm_eps),
             'upgrad_reg_eps': float(params.upgrad_reg_eps),
         }
+    elif moea in ('pcd_openes', 'pcd-openes', 'pcd_guidedes', 'pcd-guidedes', 'pcd_openes_libmtl', 'pcd-openes-libmtl'):
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'lr': float(params.evo_es_lr),
+            'sigma': float(params.evo_es_sigma),
+            'sigma_decay': float(params.evo_es_sigma_decay),
+            'sigma_min': float(params.evo_es_sigma_min),
+            'fitness_shaping': str(params.evo_es_fitness_shaping).strip().lower(),
+            'direction': str(params.evo_pcd_direction).strip().lower(),
+            'gramian': str(params.evo_pcd_gramian).strip().lower(),
+            'gramian_ema': float(params.evo_pcd_gramian_ema),
+            'grad_norm': str(params.evo_pcd_grad_norm).strip().lower(),
+            'grad_save_freq': int(params.evo_es_grad_save_freq),
+            'kappa': float(params.evo_pcd_kappa),
+            'lam': float(params.evo_pcd_lambda),
+            'trust_radius': float(params.evo_pcd_trust_radius),
+            'stationary_tol': float(params.evo_pcd_stationary_tol),
+            'antithetic': bool(params.evo_es_antithetic),
+            'grad_cos_freq': int(params.evo_es_grad_cos_freq),
+            'optim': str(params.evo_es_optim),
+            'adam_betas': (float(params.evo_es_adam_beta1), float(params.evo_es_adam_beta2)),
+            'adam_eps': float(params.evo_es_adam_eps),
+            'rmsprop_alpha': float(params.evo_es_rmsprop_alpha),
+            'rmsprop_eps': float(params.evo_es_rmsprop_eps),
+            'sgd_momentum': float(params.evo_es_sgd_momentum),
+        }
+        if moea in ('pcd_guidedes', 'pcd-guidedes'):  # PCD-GuidedES: Guided ES sampling
+            evo_kwargs.update({
+                'guided_k': int(params.evo_es_guided_k),
+                'guided_alpha': float(params.evo_es_guided_alpha),
+                'guided_sigma': float(params.evo_es_guided_sigma),
+                'guided_ema': float(params.evo_es_guided_ema),
+            })
     elif moea in ('dcpsl_es', 'dcpsl-es'):
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
@@ -741,7 +845,7 @@ def _make_evo_args(params):
         hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
         if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
             evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
-    elif moea in ('psl_es', 'psl-es', 'tpsl_es', 'tpsl-es'):
+    elif moea in ('psl_es', 'psl-es', 'tpsl_es', 'tpsl-es', 'emapsl_es', 'emapsl-es'):
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
             'pop_size': params.evo_pop_size,
@@ -772,11 +876,52 @@ def _make_evo_args(params):
             'guided_sigma': float(params.evo_es_guided_sigma),
             'guided_ema': float(params.evo_es_guided_ema),
         }
+        if moea.startswith('emapsl'):  # EMA-PSL-ES: B is the moving average of tangents
+            evo_kwargs['b_scale'] = float(params.evo_emapsl_b_scale)
+            evo_kwargs['b_ema'] = float(params.evo_emapsl_b_ema)
         if moea.startswith('tpsl'):  # Tangent PSL-ES: the line length c and the tangent's moving averages
             evo_kwargs['c0'] = float(params.evo_tpsl_c0)
             evo_kwargs['c_lr'] = float(params.evo_tpsl_c_lr)
             evo_kwargs['grad_ema'] = float(params.evo_tpsl_grad_ema)
             evo_kwargs['brake'] = bool(params.evo_tpsl_brake)
+        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
+            evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
+    elif moea in ('psl_taskguide', 'psl-taskguide'):
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'lr': float(params.evo_es_lr),
+            'sigma': float(params.evo_es_sigma),
+            'sigma_decay': float(params.evo_es_sigma_decay),
+            'sigma_min': float(params.evo_es_sigma_min),
+            'scalarization': str(params.evo_psl_scalarization).strip().lower(),
+            'psl_params': str(params.evo_psl_params),
+            'eval_points': int(params.evo_psl_eval_points),
+            'fitness_shaping': str(params.evo_es_fitness_shaping).strip().lower(),
+            'map_degree': int(params.evo_psl_map_degree),
+            'map_init_width': float(params.evo_psl_map_init_width),
+            'map_sigma': float(params.evo_psl_map_sigma),
+            'map_width_sigma': float(params.evo_psl_map_width_sigma),
+            'map_lr': float(params.evo_psl_map_lr),
+            'steering_ema': float(params.evo_psl_steering_ema),
+            'curvature_step': float(params.evo_psl_curvature_step),
+            'curvature_ema': float(params.evo_psl_curvature_ema),
+            'ablation': str(params.evo_psl_ablation).strip().lower(),
+            'grad_cos_freq': int(params.evo_es_grad_cos_freq),
+            'antithetic': bool(params.evo_es_antithetic),
+            'optim': str(params.evo_es_optim),
+            'adam_betas': (float(params.evo_es_adam_beta1), float(params.evo_es_adam_beta2)),
+            'adam_eps': float(params.evo_es_adam_eps),
+            'rmsprop_alpha': float(params.evo_es_rmsprop_alpha),
+            'rmsprop_eps': float(params.evo_es_rmsprop_eps),
+            'guided_alpha': float(params.evo_es_guided_alpha),
+            'guided_sigma': float(params.evo_es_guided_sigma),
+            'guided_ema': float(params.evo_es_guided_ema),
+        }
         hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
         if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
             evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
@@ -786,6 +931,7 @@ def _make_evo_args(params):
     return {
         'evo_training': True,
         'evo_schedule': getattr(params, 'evo_schedule', 'gd_then_evolution'),
+        'evo_eval_per_epoch': int(getattr(params, 'evo_eval_per_epoch', 0) or 0),
         'moea': params.evo_moea,
         'evo_kwargs': evo_kwargs,
     }
