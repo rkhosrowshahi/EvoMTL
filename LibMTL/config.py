@@ -134,7 +134,7 @@ _parser.add_argument(
     '--evo_moea',
     type=str,
     default='nsga2',
-    help='nsga2, mopso (MOPSO-CD in pymoo), comocma (two tasks only); single-network ES on the weights (uses the '
+    help='multi_center_pareto_openes (persistent centers; --evo_mc_*), nsga2, mopso (MOPSO-CD in pymoo), comocma (two tasks only); single-network ES on the weights (uses the '
          '--evo_es_* flags): openes (OpenES on the sum of losses), guidedes (the same with Guided ES sampling; also '
          'uses --evo_es_guided_*), snes / pgpe (OpenES on the sum of losses with per-parameter step sizes), '
          'mo_upgrad_openes (per-objective OpenES pseudo-gradients aggregated by UPGrad), mo_upgrad_guidedes (the same '
@@ -253,6 +253,18 @@ _parser.add_argument('--evo_cma_tolstagnation', type=float, default=None,
                     help='COMO-CMA CMA tolstagnation (0 disables)')
 _parser.add_argument('--evo_cma_tolflatfitness', type=float, default=None,
                     help='COMO-CMA CMA tolflatfitness')
+# Persistent Pareto-center OpenES: raw task vectors and coordinated SGD.
+_parser.add_argument('--evo_mc_sample_pool', choices=('off', 'kernel'), default='off',
+                    help='kernel: all centers recombine all current probes with center-specific vector-loss targets')
+_parser.add_argument('--evo_mc_pool_target_distance', type=float, default=0.02)
+_parser.add_argument('--evo_mc_pool_temperature', type=float, default=0.005)
+_parser.add_argument('--evo_mc_centers', type=int, default=5)
+_parser.add_argument('--evo_mc_init_std', type=float, default=0.001)
+_parser.add_argument('--evo_mc_stats_beta', type=float, default=0.9)
+_parser.add_argument('--evo_mc_spread_radius', type=float, default=0.1)
+_parser.add_argument('--evo_mc_tradeoff', type=float, default=0.01)
+_parser.add_argument('--evo_mc_descent_fraction', type=float, default=0.5)
+_parser.add_argument('--evo_mc_max_step_norm', type=float, default=1.0)
 _parser.add_argument('--evo_es_lr', type=float, default=1e-3,
                     help='ES: learning rate of the optimizer on the search-distribution mean')
 _parser.add_argument('--evo_es_sigma', type=float, default=0.01,
@@ -696,7 +708,27 @@ def _make_evo_args(params):
 
     evo_eval_freq = int(getattr(params, 'evo_eval_freq', 1))
 
-    if moea == 'nsga2':
+    if moea.replace('-', '_') == 'multi_center_pareto_openes':
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'num_centers': params.evo_mc_centers,
+            'sample_pool': params.evo_mc_sample_pool,
+            'pool_target_distance': params.evo_mc_pool_target_distance,
+            'pool_temperature': params.evo_mc_pool_temperature,
+            'sigma': params.evo_es_sigma,
+            'lr': params.evo_es_lr,
+            'init_std': params.evo_mc_init_std,
+            'stats_beta': params.evo_mc_stats_beta,
+            'spread_radius': params.evo_mc_spread_radius,
+            'tradeoff': params.evo_mc_tradeoff,
+            'descent_fraction': params.evo_mc_descent_fraction,
+            'max_step_norm': params.evo_mc_max_step_norm,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+        }
+    elif moea == 'nsga2':
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
             'pop_size': params.evo_pop_size,

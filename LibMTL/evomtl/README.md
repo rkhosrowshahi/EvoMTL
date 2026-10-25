@@ -6,3 +6,9 @@ FlattenLoRA with rank=8: z dim = 9660 (conv=2440, linear=7190, other=30) | model
 
 FlattenLoRA with rank=1: z dim = 1295 (conv=305, linear=960, other=30) | model params = 42350
 [EvoMTL] MOEA (parameter sharing): num_parameters=42350 | num_dimensions=1295
+## Persistent Pareto centers
+
+`evo_moea: multi_center_pareto_openes` learns multiple persistent networks with
+vector antithetic OpenES and coordinated, bounded spreading. See the
+[algorithm and runnable MultiMNIST example](moea/MULTI_CENTER_PARETO_OPENES.md)
+for configuration, checkpoint semantics, tests and stochastic limitations.

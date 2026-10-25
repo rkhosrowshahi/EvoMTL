@@ -1,0 +1,33 @@
+# Small runnable example; increase iterations/pairs after validating the budget.
+mode: train
+seed: 1
+gpu_id: "0"
+weighting: EW  # Unused: no backpropagation or weighted task loss in ES.
+arch: HPS
+rep_grad: false
+multi_input: false
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 64
+test_bs: 1000
+epochs: 0
+evo_training: true
+evo_schedule: evolution
+evo_moea: multi_center_pareto_openes
+evo_iterations: 100
+evo_pop_size: 32  # Per center: 16 antithetic pairs.
+evo_num_batches: 1
+evo_eval_freq: 0
+evo_seed: 1
+evo_es_sigma: 0.01
+evo_es_lr: 0.001
+evo_mc_centers: 5
+evo_mc_init_std: 0.001
+evo_mc_stats_beta: 0.9
+evo_mc_spread_radius: 0.1
+evo_mc_tradeoff: 0.01
+evo_mc_descent_fraction: 0.5
+evo_mc_max_step_norm: 1.0
+save_path: logs/mnist/pareto_centers/seed_1
+wandb_enable: false

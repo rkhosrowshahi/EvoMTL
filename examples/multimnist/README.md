@@ -133,3 +133,82 @@ python run_grad_aggs.py configs/10epochs/mnist --dry_run           # list what w
 <a id="5">[5]</a> Aviv Navon, Aviv Shamsian, Gal Chechik, and Ethan Fetaya. Learning the Pareto front with hypernetworks. In *International Conference on Learning Representations*, 2021.
 
 <a id="6">[6]</a> Nikolaos Dimitriadis, Pascal Frossard, and François Fleuret. Pareto manifold learning: Tackling multiple tasks via ensembles of single-task models. In *International Conference on Machine Learning*, 2023.
+
+## Multi-Center Pareto-OpenES
+
+Train a persistent set of two-head LeNet networks with vector antithetic ES,
+matched batches, and constrained objective-space spreading:
+
+```sh
+# From the repository root (uv sync first)
+PYTHONPATH=. uv run python examples/multimnist/main.py \
+  --config examples/multimnist/configs/pareto_centers/mnist.yaml \
+  --dataset_path examples/multimnist
+```
+
+See [algorithm, settings, outputs and tests](../../LibMTL/evomtl/moea/MULTI_CENTER_PARETO_OPENES.md).
+The checkpoint preserves all centers; the ordinary single-model checkpoint uses
+center 0. No archive or weighted task-loss scalarization is used.
+
+For the existing 10-epoch sampled-data protocol (2,344 iterations, batch size
+256), use this config instead:
+
+```sh
+PYTHONPATH=. uv run python examples/multimnist/main.py \
+  --config examples/multimnist/configs/10epochs/mnist/evomtl/multi_center_pareto_openes/pop_32/sgd-lr_0.001/seed1.yaml \
+  --dataset_path examples/multimnist
+```
+
+This keeps five centers, 32 probes per center and the short example's update
+settings. The sampled-data budget matches the other 10-epoch configs; total
+probe computation does not. Full test metrics are saved for all centers every
+50 iterations, plus the baseline and final state.
+
+To enable shared probes with center-specific sample weights, use
+`configs/pareto_centers/mnist_shared_pool.yaml` with the same entry point. Every
+center combines perturbation offsets from the full current probe pool; its own
+vector ES Jacobian still constrains the update. The original default is kept
+for controls. A corresponding 10-epoch config is under
+`configs/10epochs/mnist/evomtl/multi_center_pareto_openes_shared/`.
+See the algorithm guide for diagnostic checkpoint fields and the initial
+matched comparison, which did not show improved spread.
+
+## Full-network-only tangent PSL test
+
+The fixed-width tangent variant optimizes only the full network vector theta.
+It computes the steering tangent from per-task ES estimates, with no learned B,
+width, or preference map. The tested setting fixes the endpoint radius at 0.1
+using `evo_tpsl_c_lr: 0`, with the existing Guided ES/Adam/Chebyshev protocol:
+
+```sh
+PYTHONPATH=. uv run python examples/multimnist/main.py \
+  --config examples/multimnist/configs/10epochs/mnist/evomtl/tpsl_fixed_width_guided_es-tch/pop_128/adam-lr_0.001/seed1.yaml \
+  --dataset_path examples/multimnist
+```
+
+The run uses 2,344 iterations, batch size 256, 128 probes and 11 preference
+readouts. All 10,000 test images are evaluated in batches of 1,000. Check
+`tpsl_result.pt` for `width_learned: false`, `optimized_num_parameters`, the
+computed tangent T, and held-out front values. The stored B is derived as
+`c*T.T` for compatibility, not an independently learned parameter. Gradient
+averages and tangent/guide vectors still consume optimizer-state memory.
+
+```sh
+uv run python -m unittest discover -s tests -p 'test_tpsl_fixed_width.py'
+```
+
+The tests verify the optimizer's parameter count, constant radius, derived
+steering matrix, endpoint geometry, finite front losses, actual network updates,
+and the separate scalar optimizer in the learned-width control.
+
+The seed-1 fixed-width test completed all 2,344 iterations. Only the 22,350 full
+network coordinates were optimized; radius c stayed exactly 0.1 throughout.
+The balanced network achieved 81.34% / 77.46% accuracy and 0.59914 / 0.70398
+cross-entropy on all 10,000 test images. Eight of eleven preference readouts
+were nondominated in test losses (lambda_1 from 0.3 through 1.0). Within that
+nondominated subset, loss spans were 0.01101 / 0.00323 and accuracy spans about
+0.62 / 0.37 percentage points. Thus the method learned a useful model and a
+local trade-off curve without learning a steering matrix or width, but it did
+not demonstrate broad coverage. The computed front varied across checkpoints.
+These are one-seed results; no matched learned-B baseline or low-rank decoder
+variant was run in this test. Three targeted fixed-width tests passed.

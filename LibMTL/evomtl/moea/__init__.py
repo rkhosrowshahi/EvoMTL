@@ -10,6 +10,7 @@ from .hv import (
     pareto_center_weights_from_marginal_hv,
     pareto_front_indices,
 )
+from .multi_center_pareto_openes import run_multi_center_pareto_openes
 from .mo_mean_openes import run_mo_mean_openes
 from .mo_mgda_guidedes import run_mo_mgda_guidedes
 from .mo_mgda_openes import run_mo_mgda_openes
@@ -27,6 +28,7 @@ from .snes import run_snes
 from .tpsl_es import run_tpsl_es
 
 __all__ = [
+    "run_multi_center_pareto_openes",
     "marginal_hypervolume_weights",
     "pareto_center_from_weights",
     "pareto_center_solution",

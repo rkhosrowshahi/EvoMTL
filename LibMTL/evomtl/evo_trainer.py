@@ -55,6 +55,7 @@ from .moea.hv import (
     pareto_front_indices,
 )
 from .moea.guidedes import run_guidedes
+from .moea.multi_center_pareto_openes import run_multi_center_pareto_openes
 from .moea.mo_mean_openes import run_mo_mean_openes
 from .moea.mo_mgda_guidedes import run_mo_mgda_guidedes
 from .moea.mo_mgda_openes import run_mo_mgda_openes
@@ -202,6 +203,7 @@ class EvoMTLTrainer(Trainer):
         train_dataloaders: Any,
         n_batches: int = 5,
         prefetched_batches: Optional[List[Tuple[Any, Any]]] = None,
+        record_losses: bool = True,
     ) -> np.ndarray:
         """Mean per-task training loss over up to ``n_batches`` mini-batches.
 
@@ -209,13 +211,16 @@ class EvoMTLTrainer(Trainer):
         :meth:`_sample_batches`), those exact batches are reused instead of
         drawing new ones.  Pass pre-fetched batches so that all solutions in a
         single MOEA iteration are evaluated on the **same** mini-batch.
+        ``record_losses=False`` excludes disposable probes from meter histories.
         """
+        # ES probes must not enter the training meter or its loss history.
+        loss_forward = self.forward4loss if record_losses else self._compute_losses_no_record
         self.model.eval()
 
         if prefetched_batches is not None:
             acc = torch.zeros(self.task_num, device=self.device)
             for inp, gts in prefetched_batches:
-                losses = self.forward4loss(self.model, inp, gts)
+                losses = loss_forward(self.model, inp, gts)
                 acc += losses.detach()
             return (acc / len(prefetched_batches)).cpu().numpy()
 
@@ -227,7 +232,7 @@ class EvoMTLTrainer(Trainer):
             acc = torch.zeros(self.task_num, device=self.device)
             for _ in range(n):
                 inp, gts = self._process_data(train_loader)
-                losses = self.forward4loss(self.model, inp, gts)
+                losses = loss_forward(self.model, inp, gts)
                 acc += losses.detach()
             return (acc / n).cpu().numpy()
 
@@ -239,7 +244,7 @@ class EvoMTLTrainer(Trainer):
                 train_inputs[task], train_gts[task] = self._process_data(
                     train_loader[task]
                 )
-            losses = self.forward4loss(self.model, train_inputs, train_gts)
+            losses = loss_forward(self.model, train_inputs, train_gts)
             acc += losses.detach()
         return (acc / n).cpu().numpy()
 
@@ -559,7 +564,9 @@ class EvoMTLTrainer(Trainer):
         evo_kwargs: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Dispatch to the MOEA / ES backend named by ``moea_key``."""
-        if moea_key == "nsga2":
+        if moea_key.replace("-", "_") == "multi_center_pareto_openes":
+            runner = run_multi_center_pareto_openes
+        elif moea_key == "nsga2":
             runner = run_nsga2
         elif moea_key in ("mopso", "mopso_cd", "mopso-cd"):
             runner = run_mopso
@@ -691,7 +698,9 @@ class EvoMTLTrainer(Trainer):
         # Pareto-center weights are already applied by the runners. COMO-CMA prints ref-cut Pareto
         # stats each iteration; the others only here.
         if moea_key not in ("comocma", "mocma", "mo-cma-es"):
-            self.print_pareto_front_objective_stats(evo_out["pareto_F"])
+            self.print_pareto_front_objective_stats(
+                evo_out["pareto_F"],
+                line_label="Persistent centers" if "centers_X" in evo_out else "Pareto front")
 
         train_eval_metrics = self.test(
             train_dataloaders,
@@ -716,6 +725,10 @@ class EvoMTLTrainer(Trainer):
             os.makedirs(self.save_path, exist_ok=True)
             torch.save(
                 {
+                    **{key: evo_out[key] for key in (
+                        "centers_X", "centers_F", "center_statistics", "center_evaluations", "representative_index",
+                        "sample_pool", "pool_settings", "pool_diagnostics", "last_pool"
+                    ) if key in evo_out},
                     "theta_0": self.theta_0,
                     "search_space": "theta",  # X entries are weights (runs before it was set: theta - theta_0)
                     "pareto_center_X": torch.as_tensor(evo_out["pareto_center_X"], dtype=torch.float32),

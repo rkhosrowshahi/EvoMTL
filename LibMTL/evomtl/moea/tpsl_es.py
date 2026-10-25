@@ -213,7 +213,7 @@ def run_tpsl_es(
     optim = str(optim).strip().lower()
     optimizer = make_es_optimizer([theta], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps)
     c = c0  # length of the line along the tangent
-    log_c = torch.tensor(math.log(c0), dtype=torch.float32, requires_grad=True)
+    log_c = torch.tensor(math.log(c0), dtype=torch.float32, requires_grad=c_lr > 0)
     c_optimizer = (torch.optim.Adam([log_c], lr=c_lr, betas=(float(adam_betas[0]), float(adam_betas[1])),
                                     eps=float(adam_eps)) if c_lr > 0 else None)
     G = torch.zeros(K, D, dtype=torch.float32)  # moving averages of the per-task gradient estimates
@@ -497,6 +497,9 @@ def run_tpsl_es(
         torch.save({
             "theta": td.clone(),                    # weights of the balanced network
             "c": c,                                 # length of the line
+            "c_lr": c_lr, "width_learned": c_optimizer is not None,
+            "optimized_num_parameters": D + int(c_optimizer is not None),
+            "num_iterations": num_iterations,
             "T": T.clone(),                         # unit tangent rows [K - 1, P] on the conditioned parameters
             "B": c * T.T.clone(),                   # the equivalent PSL-ES steering matrix c T^T [P, K - 1]
             "G": G.clone(),                         # moving averages of the per-task gradient estimates [K, D]
