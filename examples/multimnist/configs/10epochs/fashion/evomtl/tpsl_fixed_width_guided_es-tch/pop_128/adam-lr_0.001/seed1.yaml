@@ -1,0 +1,53 @@
+# Full-network-only optimization: computed tangent, fixed c=0.1.
+# Existing TPSL guided settings with c_lr=0; no learned steering/map/width.
+# Test batch size changes memory use only; all 10,000 test images are evaluated.
+mode: train
+seed: 1
+gpu_id: '0'
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+dataset: fashion
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 1000
+epochs: 0
+evo_training: true
+evo_schedule: evolution
+evo_moea: tpsl_es
+evo_iterations: 2344
+evo_pop_size: 128
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 1
+evo_psl_params: all
+evo_psl_scalarization: tch
+evo_psl_eval_points: 11
+evo_tpsl_c0: 0.1
+evo_tpsl_c_lr: 0.0
+evo_tpsl_grad_ema: 0.9
+evo_hv_ref_point:
+- 2.302585
+- 2.302585
+evo_es_lr: 0.001
+evo_es_optim: adam
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-08
+evo_es_sigma: 0.01
+evo_es_sigma_decay: 1.0
+evo_es_sigma_min: 0.0
+evo_es_antithetic: true
+evo_es_guided_k: 1
+evo_es_guided_alpha: 0.9
+evo_es_guided_sigma: 0.05
+evo_es_guided_ema: 0.9
+save_path: logs/fashion/10epochs/tpsl_fixed_width_guided_es-tch/pop_128/adam-lr_0.001/seed_1
+load_path: null
+wandb_entity: rasa_research
+wandb_enable: true
+wandb_project: evomtl-multifashion
+wandb_name: tpsl-fixed-width-10epochs-seed1
+wandb_group: tpsl-fixed-width-10epochs

@@ -19,7 +19,13 @@ where a Pareto exploration mode would take over (not part of this module: the st
 
 ``grad_norm`` divides each pseudo-gradient by a normalizer before the direction is computed, as LibMTL's MGDA
 ``mgda_gn`` (Sener & Koltun 2018): its loss (``loss``, the MGDA-Loss variant), its norm (``l2``, MGDA-GN) or both
-(``loss+``).
+(``loss+``). The step is then ``sum_k alpha_k g_k / n_k``: with ``loss`` its length scales as ``1 / L``, so it
+vanishes when the losses are large and grows without bound as they go to zero (under SGD). ``loss2`` (LN2) keeps the
+direction of ``loss`` and takes the step with the weights ``alpha_k / L_k`` normalized to sum to one,
+
+    d = sum_k w_k g_k,     w_k = (alpha_k / L_k) / sum_j (alpha_j / L_j),
+
+a convex combination of the raw pseudo-gradients, like MGDA without normalization.
 
 The Gramian ``M = G G^T`` that sets ``alpha*`` is biased by the estimation noise: ``E[g^_i . g^_j] = g_i . g_j +
 tr Cov(g^_i, g^_j)``, and at OpenES's signal-to-noise ratio the noise term dominates, so ``alpha*`` weighs the
@@ -86,15 +92,16 @@ from .hv import pareto_front_indices
 
 DIRECTIONS = ("mgda", "robust")
 GRAMIANS = ("raw", "debiased")
-GRAD_NORMS = ("none", "loss", "l2", "loss+")
+GRAD_NORMS = ("none", "loss", "l2", "loss+", "loss2")
 
 
 def gradient_normalizers(F: np.ndarray, G: torch.Tensor, grad_norm: str) -> torch.Tensor:
     """Per-objective divisors of the pseudo-gradients before MGDA (LibMTL ``MGDA`` ``mgda_gn``; Sener & Koltun
     2018): ``loss`` = the loss ``L_k`` (population mean, an estimate of the smoothed loss at ``theta``), ``l2`` =
-    ``||g_k||``, ``loss+`` = ``L_k ||g_k||``, ``none`` = 1."""
+    ``||g_k||``, ``loss+`` = ``L_k ||g_k||``, ``none`` = 1; ``loss2`` (LN2) = ``loss``, the step is rescaled in
+    the loop."""
     loss = torch.as_tensor(F.mean(axis=0), dtype=torch.float32).clamp_min(1e-12)
-    if grad_norm == "loss":
+    if grad_norm in ("loss", "loss2"):
         return loss
     if grad_norm == "l2":
         return G.norm(dim=1).clamp_min(1e-30)
@@ -200,7 +207,7 @@ def robust_direction(
 def method_name(direction: str, gramian: str, grad_norm: str) -> str:
     """Logged name, e.g. ``MO-MGDA-OpenES``, ``MO-MGDA-Loss-OpenES``, ``MO-MGDA-Robust-OpenES``."""
     parts = ["MGDA"] + (["Robust"] if direction == "robust" else []) + (["Debiased"] if gramian == "debiased" else [])
-    parts += {"none": [], "loss": ["Loss"], "l2": ["GN"], "loss+": ["LossGN"]}[grad_norm]
+    parts += {"none": [], "loss": ["Loss"], "l2": ["GN"], "loss+": ["LossGN"], "loss2": ["Loss2"]}[grad_norm]
     return "MO-" + "-".join(parts) + "-OpenES"
 
 
@@ -272,7 +279,9 @@ def run_mo_mgda_openes(
     grad_norm : str
         Divide each pseudo-gradient by a normalizer before the direction is computed, as LibMTL's MGDA
         ``mgda_gn``: ``"none"`` (default), ``"loss"`` (its loss), ``"l2"`` (its norm) or ``"loss+"`` (both). The
-        step is ``-sum_k alpha_k g_k / n_k``, so objective k's raw gradient gets the weight ``alpha_k / n_k``.
+        step is ``-sum_k alpha_k g_k / n_k``, so objective k's raw gradient gets the weight ``alpha_k / n_k``;
+        ``"loss2"`` (LN2) divides those weights by their sum (the direction of ``"loss"``, a convex combination of
+        the raw gradients).
         The backprop diagnostic is normalized the same way (its own norms for ``l2``, the same losses).
     stationary_tol : float
         MGDA: flag the generation Pareto-stationary when ``||d|| <= stationary_tol * max_j ||g_j||``.
@@ -403,6 +412,8 @@ def run_mo_mgda_openes(
             beta, margin = robust_direction(M, C, alpha, float(kappa), float(lam), trust_radius)
             stationary = margin <= 0.0
         d = torch.as_tensor(beta, dtype=torch.float32) @ G  # common descent direction (on the losses)
+        if grad_norm == "loss2":  # LN2: raw-gradient weights beta_k / L_k normalized to sum to one in magnitude
+            d = d / float((np.abs(beta) / gn.double().numpy()).sum())
         d_norm = float(d.norm())
         n_stationary += int(stationary)
 

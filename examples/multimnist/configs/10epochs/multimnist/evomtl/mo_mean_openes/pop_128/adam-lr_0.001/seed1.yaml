@@ -1,0 +1,54 @@
+# 10-epoch protocol (PaMaL's budget): 2344 generations x 256 images = 10 epochs.
+# MO-Mean-OpenES: one OpenES pseudo-gradient per objective (each loss ranked separately), combined by
+# an equal-weight average; Adam on the search mean. Same settings as OpenES
+# (openes/pop_128/adam-lr_0.001/seed1.yaml) apart from the aggregator.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Model (shared LeNet encoder, one head per task)
+weighting: EW                  # gradient-descent loss weighting; unused here (epochs: 0)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0                      # no gradient-descent phase: training is ES only
+
+# Evolution strategy (MO-Mean-OpenES); evo_moea selects the algorithm
+evo_training: true
+evo_schedule: evolution        # evolutionary training only, no gradient descent
+evo_moea: mo_mean_openes
+evo_iterations: 2344        # 10 epochs: 2,344 generations x 256 images
+evo_pop_size: 128
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 1
+evo_es_lr: 0.001
+evo_es_optim: adam            # optimizer on the search mean (sgd, adam or rmsprop); evo_es_lr is its learning rate
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.01
+evo_es_sigma_decay: 1.0
+evo_es_sigma_min: 0.0
+evo_es_antithetic: true
+evo_es_grad_cos_freq: 1       # log cosine(pseudo-gradient, backprop gradient); 0 = off
+
+# Paths
+save_path: logs/multimnist/10epochs/mo_mean_openes/pop_128/adam-lr_1e-3/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_enable: true
+wandb_project: evomtl-multimnist
+wandb_name: mo_mean_openes-10epochs-pop_128-adam-lr_0.001-seed1
+wandb_group: mo_mean_openes-10epochs-pop_128-adam-lr_0.001

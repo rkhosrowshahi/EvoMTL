@@ -1,0 +1,31 @@
+# MO-Mean-GuidedES on HQF, the homogeneous quadratic form (one matrix, scales 1 and 10), of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their protocol with the ES direction in place of the aggregated Jacobian: their initial points, SGD with
+# lr = 0.005 (their rate for HQF) x 1 (aggregator mean), 100 iterations.
+# Losses are >= 0 (no offset needed); the ES estimate of a quadratic's gradient is unbiased for any sigma.
+# guided_sigma 0: noise budget of isotropic OpenES (s = sqrt((1 - alpha) D / k)). The estimate's mean is
+# Cov(eps) grad; the 0.05 of the Nash-MTL configs (5 sigma along the guide) makes it ~26x the gradient
+# along the guide, which Adam absorbs there but SGD at these learning rates does not (it diverges).
+
+name: MO-Mean-GuidedES
+moea: mo_mean_guidedes
+problem:
+  name: hqf
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 100
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.005
+  optim: sgd
+  sgd_momentum: 0.0
+  fitness_shaping: raw
+  antithetic: true
+  guided_k: 1
+  guided_alpha: 0.9
+  guided_sigma: 0.0
+  guided_ema: 0.9
+save_path: examples/toy/logs/hqf/mo_mean_guidedes/

@@ -56,7 +56,12 @@ from .moea.hv import (
 )
 from .moea.guidedes import run_guidedes
 from .moea.multi_center_pareto_openes import run_multi_center_pareto_openes
+from .moea.mo_mean_guidedes import run_mo_mean_guidedes
+from .moea.mo_cagrad_guidedes import run_mo_cagrad_guidedes
+from .moea.mo_cagrad_openes import run_mo_cagrad_openes
 from .moea.mo_mean_openes import run_mo_mean_openes
+from .moea.mo_mgda2_guidedes import run_mo_mgda2_guidedes
+from .moea.mo_mgda2_openes import run_mo_mgda2_openes
 from .moea.mo_mgda_guidedes import run_mo_mgda_guidedes
 from .moea.mo_mgda_openes import run_mo_mgda_openes
 from .moea.mo_mgda_openes_libmtl import run_mo_mgda_openes_libmtl
@@ -82,9 +87,14 @@ ES_RUNNERS = {
     "mo_upgrad_openes": run_mo_upgrad_openes,
     "mo_upgrad_guidedes": run_mo_upgrad_guidedes,
     "mo_mean_openes": run_mo_mean_openes,
+    "mo_mean_guidedes": run_mo_mean_guidedes,
     "mo_mgda_openes": run_mo_mgda_openes,
     "mo_mgda_guidedes": run_mo_mgda_guidedes,
     "mo_mgda_openes_libmtl": run_mo_mgda_openes_libmtl,
+    "mo_cagrad_openes": run_mo_cagrad_openes,
+    "mo_cagrad_guidedes": run_mo_cagrad_guidedes,
+    "mo_mgda2_openes": run_mo_mgda2_openes,
+    "mo_mgda2_guidedes": run_mo_mgda2_guidedes,
 }
 PSL_ES_KEYS = ("psl_es", "psl-es")
 TPSL_ES_KEYS = ("tpsl_es", "tpsl-es")

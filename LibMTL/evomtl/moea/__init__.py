@@ -11,7 +11,12 @@ from .hv import (
     pareto_front_indices,
 )
 from .multi_center_pareto_openes import run_multi_center_pareto_openes
+from .mo_cagrad_guidedes import run_mo_cagrad_guidedes
+from .mo_cagrad_openes import run_mo_cagrad_openes
+from .mo_mean_guidedes import run_mo_mean_guidedes
 from .mo_mean_openes import run_mo_mean_openes
+from .mo_mgda2_guidedes import run_mo_mgda2_guidedes
+from .mo_mgda2_openes import run_mo_mgda2_openes
 from .mo_mgda_guidedes import run_mo_mgda_guidedes
 from .mo_mgda_openes import run_mo_mgda_openes
 from .mo_mgda_openes_libmtl import run_mo_mgda_openes_libmtl
@@ -37,7 +42,12 @@ __all__ = [
     "run_comocma",
     "run_dcpsl_es",
     "run_guidedes",
+    "run_mo_cagrad_guidedes",
+    "run_mo_cagrad_openes",
+    "run_mo_mean_guidedes",
     "run_mo_mean_openes",
+    "run_mo_mgda2_guidedes",
+    "run_mo_mgda2_openes",
     "run_mo_mgda_guidedes",
     "run_mo_mgda_openes",
     "run_mo_mgda_openes_libmtl",

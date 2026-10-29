@@ -1,0 +1,26 @@
+# OpenES on MN20, the multinorm, a = (1, ..., 20), 20 objectives, of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their protocol with the ES direction in place of the aggregated Jacobian: their initial points, SGD with
+# lr = 0.005 (their rate for MN20) x 1/20: the sum of the losses is 20 x their mean (aggregator mean: 1), 500 iterations.
+# Losses are >= 0 (no offset needed); the ES estimate of a quadratic's gradient is unbiased for any sigma.
+# pop_size 64: with antithetic pairs the estimate of a quadratic's gradient is
+# (1/n) sum_u eps_u eps_u^T grad, whose relative error grows as sqrt(D / n) (D = 20 here).
+
+name: OpenES
+moea: openes
+problem:
+  name: mn20
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 500
+  pop_size: 64
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.00025
+  optim: sgd
+  sgd_momentum: 0.0
+  fitness_shaping: raw
+  antithetic: true
+save_path: examples/toy/logs/mn20/openes/

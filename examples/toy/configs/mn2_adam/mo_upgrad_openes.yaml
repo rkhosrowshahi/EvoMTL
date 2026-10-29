@@ -1,0 +1,27 @@
+# MO-UPGrad-OpenES on MN2, the multinorm, a = (1, 10), of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their initial points with the Adam protocol of the Nash-MTL configs (configs/mo_upgrad_openes.yaml): Adam lr 1e-3 for
+# every method, 35,000 iterations; the SGD protocol of the reference is configs/mn2/mo_upgrad_openes.yaml.
+# Losses are >= 0 (no offset needed).
+
+name: MO-UPGrad-OpenES
+moea: mo_upgrad_openes
+problem:
+  name: mn2
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 35000
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.001
+  optim: adam
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-08
+  fitness_shaping: raw
+  antithetic: true
+  upgrad_norm_eps: 0.0001
+  upgrad_reg_eps: 0.0001
+save_path: examples/toy/logs/mn2_adam/mo_upgrad_openes/

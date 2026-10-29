@@ -1,0 +1,33 @@
+# MO-CAGrad-GuidedES on CQF, the convex quadratic form (Eq. 14 of the UPGrad paper), of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their protocol with the ES direction in place of the aggregated Jacobian: their initial points, SGD with
+# lr = 0.125 (their rate for CQF) x 1 (aggregator cagrad), 200 iterations.
+# Losses are >= 0 (no offset needed); the ES estimate of a quadratic's gradient is unbiased for any sigma.
+# guided_sigma 0: noise budget of isotropic OpenES (s = sqrt((1 - alpha) D / k)). The estimate's mean is
+# Cov(eps) grad; the 0.05 of the Nash-MTL configs (5 sigma along the guide) makes it ~26x the gradient
+# along the guide, which Adam absorbs there but SGD at these learning rates does not (it diverges).
+
+name: MO-CAGrad-GuidedES
+moea: mo_cagrad_guidedes
+problem:
+  name: cqf
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 200
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.125
+  optim: sgd
+  sgd_momentum: 0.0
+  fitness_shaping: raw
+  antithetic: true
+  cagrad_alpha: 0.5
+  cagrad_rescale: 1
+  guided_k: 1
+  guided_alpha: 0.9
+  guided_sigma: 0.0
+  guided_ema: 0.9
+save_path: examples/toy/logs/cqf/mo_cagrad_guidedes/

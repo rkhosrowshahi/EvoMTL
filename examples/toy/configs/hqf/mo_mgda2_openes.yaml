@@ -1,0 +1,27 @@
+# MO-MGDA2-OpenES on HQF, the homogeneous quadratic form (one matrix, scales 1 and 10), of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their protocol with the ES direction in place of the aggregated Jacobian: their initial points, SGD with
+# lr = 0.005 (their rate for HQF) x 2 (aggregator mgda), 100 iterations.
+# Losses are >= 0 (no offset needed); the ES estimate of a quadratic's gradient is unbiased for any sigma.
+# MGDA2: MGDA after dropping the smallest pseudo-gradient while its norm is below drop_eps times the norm of the
+# MGDA direction of the others (LibMTL/evomtl/moea/mo_mgda2_openes.py); otherwise as mo_mgda_openes.yaml.
+
+name: MO-MGDA2-OpenES
+moea: mo_mgda2_openes
+problem:
+  name: hqf
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 100
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.01
+  optim: sgd
+  sgd_momentum: 0.0
+  fitness_shaping: raw
+  antithetic: true
+  drop_eps: 0.1                 # drop g_k while ||g_k|| < 0.1 ||MGDA direction of the others||
+save_path: examples/toy/logs/hqf/mo_mgda2_openes/

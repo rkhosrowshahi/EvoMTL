@@ -1,0 +1,26 @@
+# MO-CAGrad-OpenES on EWQ, the element-wise quadratic f = (x1^2, x2^2), of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their protocol with the ES direction in place of the aggregated Jacobian: their initial points, SGD with
+# lr = 0.075 (their rate for EWQ) x 1 (aggregator cagrad), 50 iterations.
+# Losses are >= 0 (no offset needed); the ES estimate of a quadratic's gradient is unbiased for any sigma.
+
+name: MO-CAGrad-OpenES
+moea: mo_cagrad_openes
+problem:
+  name: ewq
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 50
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.075
+  optim: sgd
+  sgd_momentum: 0.0
+  fitness_shaping: raw
+  antithetic: true
+  cagrad_alpha: 0.5
+  cagrad_rescale: 1
+save_path: examples/toy/logs/ewq/mo_cagrad_openes/

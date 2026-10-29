@@ -1,0 +1,39 @@
+# MO-MGDA2-GuidedES on the Nash-MTL toy problem (Navon et al. 2022, experiments/toy): one OpenES pseudo-gradient per objective (raw fitness), combined into the min-norm
+# common descent direction d = -G^T alpha* (MGDA).
+# Same settings as mo_mgda2_openes.yaml plus Guided ES sampling along the moving average of past ES directions.
+# Protocol of experiments/toy/trainer.py (five initial points, Adam lr 1e-3 on x, 35,000 iterations) without the
+# scale on the first loss, as in Fig. 1 of Aligned-MTL (Senushkin et al., CVPR 2023).
+# MGDA2: MGDA after dropping the smallest pseudo-gradient while its norm is below drop_eps times the norm of the
+# MGDA direction of the others (LibMTL/evomtl/moea/mo_mgda2_openes.py); otherwise as mo_mgda_guidedes.yaml.
+
+name: MO-MGDA2-GuidedES
+moea: mo_mgda2_guidedes
+
+# Toy problem
+problem:
+  scale: 1.0                    # no scale on the first loss (Aligned-MTL, CAGrad)
+  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA(LN) only
+
+seeds: [1, 2, 3]
+
+# Evolution strategy: keyword arguments of the runner (LibMTL.evomtl.moea.run_mo_mgda2_guidedes)
+es:
+  num_iterations: 35000
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.001
+  optim: adam                   # optimizer on the search mean (sgd, adam or rmsprop); lr is its learning rate
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+  fitness_shaping: raw          # keeps the size of each pseudo-gradient
+  antithetic: true
+  drop_eps: 0.1                 # drop g_k while ||g_k|| < 0.1 ||MGDA direction of the others||
+  guided_k: 1                   # one guiding direction (the moving average below)
+  guided_alpha: 0.9             # fraction of the noise budget kept isotropic
+  guided_sigma: 0.05            # perturbation size along the guiding direction
+  guided_ema: 0.9               # guide = moving average of past ES directions with this decay
+
+# Paths (relative to the repository root)
+save_path: examples/toy/logs/scale_1/mo_mgda2_guidedes/

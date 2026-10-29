@@ -1,0 +1,34 @@
+# MO-MGDA(LN2)-GuidedES on HQF, the homogeneous quadratic form (one matrix, scales 1 and 10), of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their initial points with the Adam protocol of the Nash-MTL configs (configs/mo_mgda_loss2_guidedes.yaml): Adam lr 1e-3 for
+# every method, 35,000 iterations; the SGD protocol of the reference is configs/hqf/mo_mgda_loss2_guidedes.yaml.
+# Losses are >= 0 (no offset needed).
+# MGDA(LN2): the direction of MGDA(LN) with the step weights alpha_k / L_k normalized to sum to one, a convex
+# combination of the raw pseudo-gradients (grad_norm loss2); otherwise as mo_mgda_loss_guidedes.yaml.
+
+name: MO-MGDA(LN2)-GuidedES
+moea: mo_mgda_guidedes
+problem:
+  name: hqf
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 35000
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.001
+  optim: adam
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-08
+  fitness_shaping: raw
+  antithetic: true
+  direction: mgda
+  grad_norm: loss2
+  stationary_tol: 0.05
+  guided_k: 1
+  guided_alpha: 0.9
+  guided_sigma: 0.05
+  guided_ema: 0.9
+save_path: examples/toy/logs/hqf_adam/mo_mgda_loss2_guidedes/

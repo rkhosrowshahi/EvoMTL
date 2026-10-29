@@ -1,0 +1,60 @@
+# 10-epoch protocol (PaMaL's budget): 2344 generations x 256 images = 10 epochs.
+# MO-MGDA-Robust-OpenES (robust ablation of MO-MGDA-OpenES). One OpenES pseudo-gradient per objective
+# (raw fitness), combined into the noise-aware direction: max s - lam/2 ||d||^2 s.t.
+# g_j.d + kappa sqrt(d^T Sigma_j d) <= -s, ||d|| <= r (kappa = 0 gives MGDA); Adam on the search mean.
+# Same settings as OpenES (openes/pop_128/adam-lr_0.001/seed1.yaml) apart from the direction.
+
+# General
+mode: train
+seed: 2
+gpu_id: "0"
+
+# Model (shared LeNet encoder, one head per task)
+weighting: EW                  # gradient-descent loss weighting; unused here (epochs: 0)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0                      # no gradient-descent phase: training is ES only
+
+# Evolution strategy (MO-MGDA-OpenES); evo_moea selects the algorithm, evo_mgda_direction the common descent direction
+evo_training: true
+evo_schedule: evolution        # evolutionary training only, no gradient descent
+evo_moea: mo_mgda_openes
+evo_iterations: 2344        # 10 epochs: 2,344 generations x 256 images
+evo_pop_size: 128
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 2
+evo_mgda_direction: robust
+evo_mgda_kappa: 1.0
+evo_mgda_lambda: 1.0
+evo_mgda_trust_radius: 1.0     # ||d|| <= 1.0 max_j ||g_j||
+evo_es_fitness_shaping: raw     # keeps the size of each pseudo-gradient, which the min-norm problem compares
+evo_es_lr: 0.001
+evo_es_optim: adam            # optimizer on the search mean (sgd, adam or rmsprop); evo_es_lr is its learning rate
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.01
+evo_es_sigma_decay: 1.0
+evo_es_sigma_min: 0.0
+evo_es_antithetic: true
+evo_es_grad_cos_freq: 1       # log cosine(pseudo-gradient, backprop gradient); 0 = off
+
+# Paths
+save_path: logs/multimnist/10epochs/mo_mgda_robust_openes/pop_128/adam-lr_1e-3-kappa_1/seed_2/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_enable: true
+wandb_project: evomtl-multimnist
+wandb_name: mo_mgda_robust_openes-10epochs-pop_128-adam-lr_0.001-kappa_1-seed2
+wandb_group: mo_mgda_robust_openes-10epochs-pop_128-adam-lr_0.001-kappa_1

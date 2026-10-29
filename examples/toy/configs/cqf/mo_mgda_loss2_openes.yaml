@@ -1,0 +1,29 @@
+# MO-MGDA(LN2)-OpenES on CQF, the convex quadratic form (Eq. 14 of the UPGrad paper), of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their protocol with the ES direction in place of the aggregated Jacobian: their initial points, SGD with
+# lr = 0.125 (their rate for CQF) x 2 (aggregator mgda), 200 iterations.
+# Losses are >= 0 (no offset needed); the ES estimate of a quadratic's gradient is unbiased for any sigma.
+# MGDA(LN2): the direction of MGDA(LN) with the step weights alpha_k / L_k normalized to sum to one, a convex
+# combination of the raw pseudo-gradients (grad_norm loss2); otherwise as mo_mgda_loss_openes.yaml.
+
+name: MO-MGDA(LN2)-OpenES
+moea: mo_mgda_openes
+problem:
+  name: cqf
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 200
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.25
+  optim: sgd
+  sgd_momentum: 0.0
+  fitness_shaping: raw
+  antithetic: true
+  direction: mgda
+  grad_norm: loss2
+  stationary_tol: 0.05
+save_path: examples/toy/logs/cqf/mo_mgda_loss2_openes/

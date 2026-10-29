@@ -66,8 +66,8 @@ _parser.add_argument('--alpha', type=float, default=1.5, help='alpha for GradNor
 ## GradDrop
 _parser.add_argument('--leak', type=float, default=0.0, help='leak for GradDrop')
 ## CAGrad
-_parser.add_argument('--calpha', type=float, default=0.5, help='calpha for CAGrad')
-_parser.add_argument('--rescale', type=int, default=1, help='rescale for CAGrad')
+_parser.add_argument('--calpha', type=float, default=0.5, help='calpha for CAGrad (also mo_cagrad_*)')
+_parser.add_argument('--rescale', type=int, default=1, help='rescale for CAGrad (also mo_cagrad_*)')
 ## Nash_MTL
 _parser.add_argument('--update_weights_every', type=int, default=1, help='update_weights_every for Nash_MTL')
 _parser.add_argument('--optim_niter', type=int, default=20, help='optim_niter for Nash_MTL')
@@ -138,10 +138,15 @@ _parser.add_argument(
          '--evo_es_* flags): openes (OpenES on the sum of losses), guidedes (the same with Guided ES sampling; also '
          'uses --evo_es_guided_*), snes / pgpe (OpenES on the sum of losses with per-parameter step sizes), '
          'mo_upgrad_openes (per-objective OpenES pseudo-gradients aggregated by UPGrad), mo_upgrad_guidedes (the same '
-         'with Guided ES sampling), mo_mean_openes (their plain mean), mo_mgda_openes (min-norm MGDA common descent '
+         'with Guided ES sampling), mo_mean_openes (their plain mean), mo_mean_guidedes (the same with Guided ES '
+         'sampling), mo_mgda_openes (min-norm MGDA common descent '
          'direction of the per-objective pseudo-gradients, or a noise-aware program; also uses --evo_mgda_*), '
          'mo_mgda_guidedes (the same with Guided ES sampling along past common directions), mo_mgda_openes_libmtl '
-         '(mo_mgda_openes with the min-norm solver and gradient normalizers of LibMTL MGDA); or psl_es '
+         '(mo_mgda_openes with the min-norm solver and gradient normalizers of LibMTL MGDA), mo_cagrad_openes '
+         '(per-objective OpenES pseudo-gradients aggregated by CAGrad; also uses --calpha, --rescale), '
+         'mo_cagrad_guidedes (the same with Guided ES sampling), mo_mgda2_openes (MGDA after dropping the negligible '
+         'pseudo-gradients; also uses --evo_mgda2_drop_eps), mo_mgda2_guidedes (the same with Guided ES sampling); '
+         'or psl_es '
          '(Pareto set learning with OpenES: one run learns preference-conditioned networks; uses the --evo_es_* '
          'and --evo_psl_* flags), or tpsl_es (Tangent PSL-ES: the same family with the steering direction computed '
          'from the per-task gradient estimates and only its length learned; also uses --evo_tpsl_*), or dcpsl_es '
@@ -278,7 +283,7 @@ _parser.add_argument('--evo_es_fitness_shaping', type=str, default='raw', choice
                          'losses minus the population mean, or unranked pair differences for PSL: the unbiased '
                          'estimator, whose size Adam\'s moments can track) or centered_ranks')
 _parser.add_argument('--evo_es_sigma_schedule', type=str, default='constant', choices=('constant', 'cosine'),
-                    help='openes, guidedes, mo_upgrad_*, mo_mean_openes: sigma schedule: constant (with --evo_es_sigma_decay) or cosine annealing from '
+                    help='openes, guidedes, mo_upgrad_*, mo_mean_*, mo_cagrad_*: sigma schedule: constant (with --evo_es_sigma_decay) or cosine annealing from '
                          '--evo_es_sigma to --evo_es_sigma_min over --evo_iterations')
 _parser.add_argument('--evo_es_sigma_lr', type=float, default=0.0,
                     help='snes / pgpe: learning rate of the per-parameter sigma update; 0 = default '
@@ -363,9 +368,10 @@ _parser.add_argument('--evo_mgda_gramian', type=str, default='raw', choices=('ra
                          'debiased = unbiased estimate of the true Gramian (removes the estimation-noise term)')
 _parser.add_argument('--evo_mgda_gramian_ema', type=float, default=0.0,
                     help='MO-MGDA-OpenES (mgda): decay of a moving average of the Gramian across generations; 0 = off')
-_parser.add_argument('--evo_mgda_grad_norm', type=str, default='none', choices=('none', 'loss', 'l2', 'loss+'),
+_parser.add_argument('--evo_mgda_grad_norm', type=str, default='none', choices=('none', 'loss', 'l2', 'loss+', 'loss2'),
                     help='MO-MGDA-OpenES: divide each pseudo-gradient by its loss (loss), norm (l2) or both (loss+) before the '
-                         'direction is computed, as LibMTL MGDA mgda_gn; none = raw')
+                         'direction is computed, as LibMTL MGDA mgda_gn; none = raw; loss2 (LN2) = loss with the '
+                         'step weights normalized to sum to one')
 _parser.add_argument('--evo_mgda_kappa', type=float, default=1.0,
                     help='MO-MGDA-OpenES (robust): conservativeness kappa, weight of the pseudo-gradient uncertainty')
 _parser.add_argument('--evo_mgda_lambda', type=float, default=1.0,
@@ -375,6 +381,9 @@ _parser.add_argument('--evo_mgda_trust_radius', type=float, default=1.0,
 _parser.add_argument('--evo_mgda_stationary_tol', type=float, default=0.05,
                     help='MO-MGDA-OpenES (mgda): flag a generation Pareto-stationary when ||d|| <= this times the '
                          'largest pseudo-gradient norm')
+_parser.add_argument('--evo_mgda2_drop_eps', type=float, default=0.1,
+                    help='mo_mgda2_*: drop the smallest pseudo-gradient while its norm is below this times the norm '
+                         'of the MGDA direction of the others (0: plain MGDA)')
 _parser.add_argument('--evo_psl_map_degree', type=int, default=3,
                     help='PSL-TaskGuide (evo_moea=psl_taskguide): degree of the monotone Bernstein preference map '
                          '(its number of shape variables)')
@@ -687,9 +696,17 @@ def _evo_two_floats_or_none(seq) -> Optional[np.ndarray]:
     return np.asarray([float(seq[0]), float(seq[1])], dtype=np.float32)
 
 
+def _evo_floats_or_none(seq) -> Optional[np.ndarray]:
+    """Parse ``--evo_*`` with ``nargs='*'``: None/empty -> None; one float per objective -> array."""
+    if seq is None or len(seq) == 0:
+        return None
+    return np.asarray([float(v) for v in seq], dtype=np.float32)
+
+
 # evo_moea keys of the single-network evolution strategies (LibMTL.evomtl.evo_trainer.ES_RUNNERS)
 ES_MOEAS = ('openes', 'guidedes', 'snes', 'pgpe', 'mo_upgrad_openes', 'mo_upgrad_guidedes', 'mo_mean_openes',
-            'mo_mgda_openes', 'mo_mgda_guidedes', 'mo_mgda_openes_libmtl')
+            'mo_mean_guidedes', 'mo_mgda_openes', 'mo_mgda_guidedes', 'mo_mgda_openes_libmtl', 'mo_cagrad_openes',
+            'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes')
 
 
 def _make_evo_args(params):
@@ -807,7 +824,8 @@ def _make_evo_args(params):
             'rmsprop_eps': float(params.evo_es_rmsprop_eps),
             'sgd_momentum': float(params.evo_es_sgd_momentum),
         }
-        if es in ('openes', 'guidedes', 'mo_upgrad_openes', 'mo_upgrad_guidedes', 'mo_mean_openes'):
+        if es in ('openes', 'guidedes', 'mo_upgrad_openes', 'mo_upgrad_guidedes', 'mo_mean_openes', 'mo_mean_guidedes',
+                  'mo_cagrad_openes', 'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes'):
             evo_kwargs['sigma_schedule'] = str(params.evo_es_sigma_schedule).strip().lower()
         if es in ('snes', 'pgpe'):  # per-parameter step sizes
             evo_kwargs['sigma_lr'] = float(params.evo_es_sigma_lr)
@@ -818,7 +836,14 @@ def _make_evo_args(params):
                 'upgrad_norm_eps': float(params.upgrad_norm_eps),
                 'upgrad_reg_eps': float(params.upgrad_reg_eps),
             })
-        if es.startswith('mo_mgda'):
+        if es.startswith('mo_cagrad'):
+            evo_kwargs.update({
+                'cagrad_alpha': float(params.calpha),
+                'cagrad_rescale': int(params.rescale),
+            })
+        if es.startswith('mo_mgda2'):
+            evo_kwargs['drop_eps'] = float(params.evo_mgda2_drop_eps)
+        elif es.startswith('mo_mgda'):
             evo_kwargs.update({
                 'direction': str(params.evo_mgda_direction).strip().lower(),
                 'gramian': str(params.evo_mgda_gramian).strip().lower(),
@@ -891,7 +916,7 @@ def _make_evo_args(params):
             'guided_sigma': float(params.evo_es_guided_sigma),
             'guided_ema': float(params.evo_es_guided_ema),
         }
-        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        hv = _evo_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
         if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
             evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
     elif moea in ('psl_es', 'psl-es', 'tpsl_es', 'tpsl-es'):
@@ -930,7 +955,7 @@ def _make_evo_args(params):
             evo_kwargs['c_lr'] = float(params.evo_tpsl_c_lr)
             evo_kwargs['grad_ema'] = float(params.evo_tpsl_grad_ema)
             evo_kwargs['brake'] = bool(params.evo_tpsl_brake)
-        hv = _evo_two_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
+        hv = _evo_floats_or_none(getattr(params, 'evo_hv_ref_point', None))
         if hv is not None:  # plain floats, so the printed evo_kwargs line stays a Python literal
             evo_kwargs['hv_ref_point'] = [float(v) for v in hv]
     elif moea in ('psl_taskguide', 'psl-taskguide'):

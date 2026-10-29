@@ -1,0 +1,33 @@
+# MO-MGDA(LN)-OpenES on the Nash-MTL toy problem (Navon et al. 2022, experiments/toy): MO-MGDA-OpenES with each pseudo-gradient divided by its loss before MGDA (LibMTL
+# mgda_gn loss); needs positive losses, hence problem.loss_offset.
+# Protocol of experiments/toy/trainer.py: five initial points, Adam lr 1e-3 on x, 35,000 iterations, scale 0.1.
+
+name: MO-MGDA(LN)-OpenES
+moea: mo_mgda_openes
+
+# Toy problem
+problem:
+  scale: 0.1                    # scale of the first loss (Nash-MTL default)
+  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA(LN) only
+
+seeds: [1, 2, 3]
+
+# Evolution strategy: keyword arguments of the runner (LibMTL.evomtl.moea.run_mo_mgda_openes)
+es:
+  num_iterations: 35000
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.001
+  optim: adam                   # optimizer on the search mean (sgd, adam or rmsprop); lr is its learning rate
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+  fitness_shaping: raw          # keeps the size of each pseudo-gradient
+  antithetic: true
+  direction: mgda               # min-norm common descent direction
+  grad_norm: loss               # divide each pseudo-gradient by its loss (MGDA(LN))
+  stationary_tol: 0.05          # flag Pareto-stationary when ||d|| <= 0.05 max_j ||g_j||
+
+# Paths (relative to the repository root)
+save_path: examples/toy/logs/mo_mgda_loss_openes/
