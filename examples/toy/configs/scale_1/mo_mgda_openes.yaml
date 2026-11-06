@@ -1,4 +1,4 @@
-# MO-MGDA-OpenES on the Nash-MTL toy problem (Navon et al. 2022, experiments/toy): one OpenES pseudo-gradient per objective (raw fitness), combined into the min-norm
+# MO-MGDA-OpenES on the Valley-Bowl (VB) problem (protocol of Nash-MTL's experiments/toy): one OpenES pseudo-gradient per objective (raw fitness), combined into the min-norm
 # common descent direction d = -G^T alpha* (MGDA).
 # Protocol of experiments/toy/trainer.py (five initial points, Adam lr 1e-3 on x, 35,000 iterations) without the
 # scale on the first loss, as in Fig. 1 of Aligned-MTL (Senushkin et al., CVPR 2023).

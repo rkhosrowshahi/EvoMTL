@@ -8,7 +8,7 @@
 * ``<fig-dir>/convergence_<family>.pdf``: distance of the search mean to the Pareto front (objective space), mean over
   initial points and seeds, per method of the OpenES / GuidedES family.
 * ``<fig-dir>/overview.png``: every trajectory panel on one grid (quick look).
-* ``<fig-dir>/nashmtl/<method>.pdf``: the figure of ``experiments/toy/trainer.py`` of Nash-MTL
+* ``<fig-dir>/loss_plane/<method>.pdf``: the figure of ``experiments/toy/trainer.py`` of Nash-MTL
   (``plot_2d_pareto`` of its ``utils.py``, reproduced in :func:`plot_2d_pareto`), one run per initial point
   (``--seed``).
 * ``<fig-dir>/3d/<method>.pdf``: the runs (``--seed``) on the surface of the average loss over
@@ -49,7 +49,7 @@ import torch  # noqa: E402
 import yaml  # noqa: E402
 
 from problem import Toy  # noqa: E402
-from problems import NashMTLToy, make_problem  # noqa: E402
+from problems import ValleyBowl, make_problem  # noqa: E402
 from runner import PARETO_X2, pareto_front  # noqa: E402
 
 FAMILIES = {
@@ -76,7 +76,7 @@ def gradient_line(ax, xy: np.ndarray) -> None:
     ax.add_collection(LineCollection(seg, colors=colors, linewidth=3, zorder=5))
 
 
-def nashmtl_axes(ax) -> None:
+def loss_plane_axes(ax) -> None:
     """Axis style of Nash-MTL's plot_2d_pareto: no top / right spines, large labels at the ends of the axes."""
     ax.spines[["top", "right"]].set_visible(False)
     ax.set_xlabel(r"$\mathcal{L}_1$", size=30)
@@ -128,7 +128,7 @@ def rasterize_dense(fig, n: int = 1000) -> None:
 
 def optimum_losses(scale: float) -> np.ndarray:
     """Losses at the minimum of the average loss (marked with a black star in every figure)."""
-    problem = NashMTLToy(scale=scale)
+    problem = ValleyBowl(scale=scale)
     return problem.losses(problem.global_optimum())
 
 
@@ -161,7 +161,7 @@ def traj_panel(ax, key: str, name: str, L: np.ndarray, front: np.ndarray, xlim, 
         ax.scatter(*mean[i, -1], color=TRAJ_CMAP(TRAJ_RANGE[1]), s=30, zorder=10)
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
-    nashmtl_axes(ax)
+    loss_plane_axes(ax)
     match_ticks(ax)
 
 
@@ -251,7 +251,7 @@ def plot_3d(trajectories: np.ndarray, scale: float, xl: float = 10.0, n: int = 3
 
     ps = np.stack([np.linspace(-7.0, 7.0, 500), np.full(500, PARETO_X2)], axis=1)
     ax.plot(ps[:, 0], ps[:, 1], mean_loss(ps, scale), color="0.5", linewidth=4, zorder=2)
-    opt = NashMTLToy(scale=scale).global_optimum()
+    opt = ValleyBowl(scale=scale).global_optimum()
     ax.scatter(*opt, mean_loss(opt[None], scale)[0], marker="*", s=200, color="k", depthshade=False, zorder=6)
 
     for traj in trajectories:
@@ -283,7 +283,7 @@ def plot_contour(trajectories: np.ndarray, scale: float, xl: float = 10.0, n: in
     star at the minimum of the average loss; runs from yellow (start, black dot) to dark red (end, small dot). ``trajectories``:
     ``[inits, T, 2]`` in x-space."""
     ticks = [-xl, -xl / 2, 0, xl / 2, xl]
-    return contour_panel(NashMTLToy(scale=scale), trajectories, (-xl, xl), (-xl, xl), ticks=ticks, n=n)
+    return contour_panel(ValleyBowl(scale=scale), trajectories, (-xl, xl), (-xl, xl), ticks=ticks, n=n)
 
 
 def contour_panel(problem, trajectories: np.ndarray, xlim, ylim, ticks=None, n: int = 200,
@@ -356,7 +356,7 @@ def loss_panel(problem, losses: np.ndarray, xlim=None, ylim=None):
     if ylim is not None:
         ax.set_ylim(*ylim)
     ax.autoscale_view()
-    nashmtl_axes(ax)
+    loss_plane_axes(ax)
     ax.xaxis.set_label_coords(1.12, -0.03)  # clear of the end tick (as plot_2d_pareto)
     ax.yaxis.set_label_coords(-0.01, 1.09)
     return ax, fig
@@ -420,7 +420,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--logs", type=Path, default=HERE / "logs")
     parser.add_argument("--fig-dir", type=Path, default=None,
-                        help="default: figures/scale_<scale> (Nash-MTL toy) or figures/<problem>")
+                        help="default: figures/scale_<scale> (Valley-Bowl problem) or figures/<problem>")
     parser.add_argument("--seed", type=int, default=1, help="seed of the Nash-MTL-style and 3-D figures")
     args = parser.parse_args()
 
@@ -428,7 +428,7 @@ def main() -> None:
     if not keys:
         raise SystemExit(f"No logs in {args.logs}")
     problem_cfg = yaml.safe_load((args.logs / keys[0] / "config.yaml").read_text())["problem"]
-    if problem_cfg.get("name", "nashmtl") != "nashmtl":  # quadratic problems (problems.py)
+    if problem_cfg.get("name", "vb") != "vb":  # quadratic problems (problems.py)
         problem = make_problem(problem_cfg["name"])
         problem_figures(problem, args.logs, args.fig_dir or HERE / "figures" / problem.name, args.seed)
         return
@@ -446,7 +446,7 @@ def main() -> None:
         args.fig_dir = HERE / "figures" / f"scale_{scale:g}"
     args.fig_dir.mkdir(parents=True, exist_ok=True)
 
-    (args.fig_dir / "nashmtl").mkdir(exist_ok=True)
+    (args.fig_dir / "loss_plane").mkdir(exist_ok=True)
     for k in keys:
         data = np.load(args.logs / k / "trajectories.npz")
         s = list(data["seeds"]).index(args.seed)
@@ -454,7 +454,7 @@ def main() -> None:
         trajectories = {i: {"traj": data["x"][i, s, :-1].astype(np.float64)} for i in range(len(inits))}
         ax, fig, legend = plot_2d_pareto(trajectories, scale)
         rasterize_dense(fig)
-        fig.savefig(args.fig_dir / "nashmtl" / f"{k}.pdf", bbox_extra_artists=(legend,), bbox_inches="tight", dpi=300,
+        fig.savefig(args.fig_dir / "loss_plane" / f"{k}.pdf", bbox_extra_artists=(legend,), bbox_inches="tight", dpi=300,
                     facecolor="white")
         plt.close(fig)
 

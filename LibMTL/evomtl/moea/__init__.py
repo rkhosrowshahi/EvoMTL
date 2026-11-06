@@ -12,6 +12,8 @@ from .hv import (
 )
 from .multi_center_pareto_openes import run_multi_center_pareto_openes
 from .mo_cagrad_guidedes import run_mo_cagrad_guidedes
+from .mo_camgda_guidedes import run_mo_camgda_guidedes
+from .mo_camgda_openes import run_mo_camgda_openes
 from .mo_cagrad_openes import run_mo_cagrad_openes
 from .mo_mean_guidedes import run_mo_mean_guidedes
 from .mo_mean_openes import run_mo_mean_openes
@@ -44,6 +46,8 @@ __all__ = [
     "run_guidedes",
     "run_mo_cagrad_guidedes",
     "run_mo_cagrad_openes",
+    "run_mo_camgda_guidedes",
+    "run_mo_camgda_openes",
     "run_mo_mean_guidedes",
     "run_mo_mean_openes",
     "run_mo_mgda2_guidedes",

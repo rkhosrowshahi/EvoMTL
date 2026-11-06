@@ -15,6 +15,9 @@ Estimator interface:
   the ES (ascent) direction, the weights of the rows in it, and ``u`` (``[N]``), the shaped fitness of the aggregated
   objective (higher = worse) that per-parameter sigma rules adapt to.
 * ``true_direction(J_true)``: the same rule applied to the backprop Jacobian (diagnostic).
+* ``set_probe(theta, evaluate)`` (optional): called before ``estimate`` with the search mean and
+  ``evaluate(X) -> F`` (``[n, D] -> [n, K]``, on the generation's mini-batch), for estimators that evaluate points
+  besides the population (e.g. the curvature probes of :mod:`.mo_camgda_openes`).
 
 Sigma rule interface: ``init(sigma, n_var)`` returns the initial step size (a float, or a ``[D]`` tensor for one step
 size per parameter), ``next(sigma, u, eps, iteration)`` the step size of generation ``iteration + 1`` and
@@ -99,6 +102,15 @@ def _sigma_stats(sigma: Any) -> Tuple[float, float, float]:
     if isinstance(sigma, torch.Tensor):
         return float(sigma.mean()), float(sigma.min()), float(sigma.max())
     return float(sigma), float(sigma), float(sigma)
+
+
+def _evaluate(trainer: Any, X: torch.Tensor, train_dataloaders: Any, batches: Any) -> np.ndarray:
+    """Losses (``[n, K]``, float64) of the points ``X`` on the mini-batch(es) ``batches``."""
+    F = np.zeros((len(X), int(trainer.task_num)))
+    for i in range(len(X)):
+        trainer.set_theta(X[i])
+        F[i] = trainer.evaluate_multiobjective_losses(train_dataloaders, prefetched_batches=batches)
+    return F
 
 
 def run_es(
@@ -233,6 +245,8 @@ def run_es(
             )
 
         # tell: pseudo-gradients -> ES direction
+        if hasattr(estimator, "set_probe"):
+            estimator.set_probe(theta.detach(), lambda X: _evaluate(trainer, X, train_dataloaders, shared_batches))
         scale = 1.0 / (pop_size * sigma)
         J, direction, w, u = estimator.estimate(F, eps, scale, fitness_shaping)
 

@@ -1,4 +1,4 @@
-# MO-UPGrad-OpenES on the Nash-MTL toy problem (Navon et al. 2022, experiments/toy): one OpenES pseudo-gradient per objective (raw fitness), combined by UPGrad.
+# MO-UPGrad-OpenES on the Valley-Bowl (VB) problem (protocol of Nash-MTL's experiments/toy): one OpenES pseudo-gradient per objective (raw fitness), combined by UPGrad.
 # Protocol of experiments/toy/trainer.py: five initial points, Adam lr 1e-3 on x, 35,000 iterations, scale 0.1.
 
 name: MO-UPGrad-OpenES

@@ -1,7 +1,8 @@
 """Synthetic multi-objective problems of the toy benchmark.
 
-* ``nashmtl``: the 2-D two-task problem of Nash-MTL (``problem.py``, Navon et al. 2022; CAGrad's toy), with
-  ``scale`` on the first loss.
+* ``vb``: the Valley-Bowl problem, 2-D with two tasks (``problem.py``; introduced with CAGrad, Liu et al. 2021,
+  and reused by Nash-MTL, Navon et al. 2022): a plateau cut by narrow log-valleys (x_2 > 0) above two
+  conflicting quadratic bowls (x_2 < 0), with ``scale`` on the first loss.
 * ``ewq``, ``cqf``, ``cqf2``, ``hqf``, ``mn2``, ``mn20``: the quadratic problems of the Jacobian-descent trajectory
   plots of UPGrad (Quinton & Rey 2024; https://github.com/SimplexLab/trajectories, ``src/trajectories/constants.py``),
   with their initial points. Every objective is a quadratic form ``f_k(x) = (x - u_k)^T A_k (x - u_k)`` (``A_k`` PSD),
@@ -33,8 +34,8 @@ import torch
 
 from problem import Toy
 
-NASHMTL_INITS = [[-8.5, 7.5], [0.0, 0.0], [9.0, 9.0], [-7.5, -0.5], [9.0, -1.0]]  # experiments/toy/trainer.py
-NASHMTL_PARETO_X2 = -8.3552  # Pareto set: x2 = NASHMTL_PARETO_X2, x1 in [-7, 7] (experiments/toy/utils.py)
+VB_INITS = [[-8.5, 7.5], [0.0, 0.0], [9.0, 9.0], [-7.5, -0.5], [9.0, -1.0]]  # Nash-MTL's experiments/toy/trainer.py
+VB_PARETO_X2 = -8.3552  # Pareto set: x2 = VB_PARETO_X2, x1 in [-7, 7] (Nash-MTL's experiments/toy/utils.py)
 
 
 class Problem:
@@ -97,14 +98,15 @@ def _polyline_distance(P: np.ndarray, S: np.ndarray, chunk: int = 512) -> np.nda
     return out.reshape(np.shape(P)[:-1])
 
 
-class NashMTLToy(Problem):
-    """The Nash-MTL toy (``problem.Toy``), its five initial points and its Pareto set (``x_2 = -8.3552``)."""
+class ValleyBowl(Problem):
+    """The Valley-Bowl problem (``problem.Toy``), its five initial points and its Pareto set
+    (``x_2 = -8.3552``)."""
 
-    name, n_params, n_obj = "nashmtl", 2, 2
+    name, n_params, n_obj = "vb", 2, 2
 
     def __init__(self, scale: float = 0.1):
         self.toy = Toy(scale=scale)
-        self.inits = NASHMTL_INITS
+        self.inits = VB_INITS
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 1:
@@ -112,7 +114,7 @@ class NashMTLToy(Problem):
         return self.toy.batch_forward(x.reshape(-1, 2)).reshape(*x.shape[:-1], 2)
 
     def pareto_set(self, n: int = 2000) -> np.ndarray:
-        return np.stack([np.linspace(-7.0, 7.0, n), np.full(n, NASHMTL_PARETO_X2)], axis=1)
+        return np.stack([np.linspace(-7.0, 7.0, n), np.full(n, VB_PARETO_X2)], axis=1)
 
     def global_optimum(self) -> np.ndarray:
         """Grid search over ``[-10, 10]^2``, refined by Nelder-Mead (``(0, -8.355)`` for scale 1)."""
@@ -197,11 +199,11 @@ def _rotation(a: float) -> np.ndarray:
     return np.array([[cos(a), -sin(a)], [sin(a), cos(a)]])
 
 
-def make_problem(name: str = "nashmtl", **kwargs) -> Problem:
-    """Problem ``name`` (``nashmtl`` takes ``scale``); the settings of SimplexLab/trajectories for the others."""
+def make_problem(name: str = "vb", **kwargs) -> Problem:
+    """Problem ``name`` (``vb`` takes ``scale``); the settings of SimplexLab/trajectories for the others."""
     name = name.lower()
-    if name == "nashmtl":
-        return NashMTLToy(**kwargs)
+    if name == "vb":
+        return ValleyBowl(**kwargs)
     if kwargs:
         raise ValueError(f"{name}: unexpected settings {sorted(kwargs)}")
     if name == "ewq":
@@ -226,4 +228,4 @@ def make_problem(name: str = "nashmtl", **kwargs) -> Problem:
     raise ValueError(f"Unknown problem {name!r}; options: {PROBLEMS}")
 
 
-PROBLEMS = ("nashmtl", "ewq", "cqf", "cqf2", "hqf", "mn2", "mn20")
+PROBLEMS = ("vb", "ewq", "cqf", "cqf2", "hqf", "mn2", "mn20")

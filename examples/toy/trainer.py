@@ -27,9 +27,9 @@ class ToyPoint(nn.Module):
 
 class ToyTrainer:
     """Trainer interface of the ES runners for the problem ``name`` of :func:`problems.make_problem` (its settings in
-    ``problem_kwargs``, e.g. ``scale`` of ``nashmtl``; losses shifted by ``loss_offset``; see ``runner.py``)."""
+    ``problem_kwargs``, e.g. ``scale`` of ``vb``; losses shifted by ``loss_offset``; see ``runner.py``)."""
 
-    def __init__(self, init, name: str = "nashmtl", loss_offset: float = 0.0, **problem_kwargs):
+    def __init__(self, init, name: str = "vb", loss_offset: float = 0.0, **problem_kwargs):
         self.problem = make_problem(name, **problem_kwargs)
         self.loss_offset = float(loss_offset)
         self.model = ToyPoint(torch.as_tensor(init, dtype=torch.float32))

@@ -1,4 +1,4 @@
-# MO-MGDA(LN2)-OpenES on the Nash-MTL toy problem (Navon et al. 2022, experiments/toy): MO-MGDA-OpenES with each pseudo-gradient divided by its loss before MGDA (LibMTL
+# MO-MGDA(LN2)-OpenES on the Valley-Bowl (VB) problem (protocol of Nash-MTL's experiments/toy): MO-MGDA-OpenES with each pseudo-gradient divided by its loss before MGDA (LibMTL
 # mgda_gn loss); needs positive losses, hence problem.loss_offset.
 # Protocol of experiments/toy/trainer.py (five initial points, Adam lr 1e-3 on x, 35,000 iterations) without the
 # scale on the first loss, as in Fig. 1 of Aligned-MTL (Senushkin et al., CVPR 2023).

@@ -145,7 +145,9 @@ _parser.add_argument(
          '(mo_mgda_openes with the min-norm solver and gradient normalizers of LibMTL MGDA), mo_cagrad_openes '
          '(per-objective OpenES pseudo-gradients aggregated by CAGrad; also uses --calpha, --rescale), '
          'mo_cagrad_guidedes (the same with Guided ES sampling), mo_mgda2_openes (MGDA after dropping the negligible '
-         'pseudo-gradients; also uses --evo_mgda2_drop_eps), mo_mgda2_guidedes (the same with Guided ES sampling); '
+         'pseudo-gradients; also uses --evo_mgda2_drop_eps), mo_mgda2_guidedes (the same with Guided ES sampling), '
+         'mo_camgda_openes (curvature-aware MGDA: drops the objectives curved upward and near their minimum; also '
+         'uses --evo_camgda_*), mo_camgda_guidedes (the same with Guided ES sampling); '
          'or psl_es '
          '(Pareto set learning with OpenES: one run learns preference-conditioned networks; uses the --evo_es_* '
          'and --evo_psl_* flags), or tpsl_es (Tangent PSL-ES: the same family with the steering direction computed '
@@ -381,6 +383,11 @@ _parser.add_argument('--evo_mgda_trust_radius', type=float, default=1.0,
 _parser.add_argument('--evo_mgda_stationary_tol', type=float, default=0.05,
                     help='MO-MGDA-OpenES (mgda): flag a generation Pareto-stationary when ||d|| <= this times the '
                          'largest pseudo-gradient norm')
+_parser.add_argument('--evo_camgda_curv_h', type=float, default=0.0,
+                    help='mo_camgda_*: step of the curvature probes along each pseudo-gradient; <= 0: 10 sigma')
+_parser.add_argument('--evo_camgda_drop_radius', type=float, default=0.0,
+                    help='mo_camgda_*: drop an objective curved upward whose Newton distance to its minimum is below '
+                         'this; <= 0: the probe step')
 _parser.add_argument('--evo_mgda2_drop_eps', type=float, default=0.1,
                     help='mo_mgda2_*: drop the smallest pseudo-gradient while its norm is below this times the norm '
                          'of the MGDA direction of the others (0: plain MGDA)')
@@ -706,7 +713,7 @@ def _evo_floats_or_none(seq) -> Optional[np.ndarray]:
 # evo_moea keys of the single-network evolution strategies (LibMTL.evomtl.evo_trainer.ES_RUNNERS)
 ES_MOEAS = ('openes', 'guidedes', 'snes', 'pgpe', 'mo_upgrad_openes', 'mo_upgrad_guidedes', 'mo_mean_openes',
             'mo_mean_guidedes', 'mo_mgda_openes', 'mo_mgda_guidedes', 'mo_mgda_openes_libmtl', 'mo_cagrad_openes',
-            'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes')
+            'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes', 'mo_camgda_openes', 'mo_camgda_guidedes')
 
 
 def _make_evo_args(params):
@@ -825,7 +832,8 @@ def _make_evo_args(params):
             'sgd_momentum': float(params.evo_es_sgd_momentum),
         }
         if es in ('openes', 'guidedes', 'mo_upgrad_openes', 'mo_upgrad_guidedes', 'mo_mean_openes', 'mo_mean_guidedes',
-                  'mo_cagrad_openes', 'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes'):
+                  'mo_cagrad_openes', 'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes', 'mo_camgda_openes',
+                  'mo_camgda_guidedes'):
             evo_kwargs['sigma_schedule'] = str(params.evo_es_sigma_schedule).strip().lower()
         if es in ('snes', 'pgpe'):  # per-parameter step sizes
             evo_kwargs['sigma_lr'] = float(params.evo_es_sigma_lr)
@@ -841,8 +849,13 @@ def _make_evo_args(params):
                 'cagrad_alpha': float(params.calpha),
                 'cagrad_rescale': int(params.rescale),
             })
-        if es.startswith('mo_mgda2'):
+        if es.startswith('mo_camgda'):
+            evo_kwargs['curv_h'] = float(params.evo_camgda_curv_h) if params.evo_camgda_curv_h > 0 else None
+            evo_kwargs['drop_radius'] = (float(params.evo_camgda_drop_radius) if params.evo_camgda_drop_radius > 0
+                                         else None)
+        if es.startswith('mo_mgda2'):  # grad_norm: none or loss2 (MGDA2-LN2)
             evo_kwargs['drop_eps'] = float(params.evo_mgda2_drop_eps)
+            evo_kwargs['grad_norm'] = str(params.evo_mgda_grad_norm).strip().lower()
         elif es.startswith('mo_mgda'):
             evo_kwargs.update({
                 'direction': str(params.evo_mgda_direction).strip().lower(),

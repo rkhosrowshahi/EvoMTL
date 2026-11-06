@@ -42,10 +42,19 @@ from .es_common import shape_fitness
 from .es_loop import make_sigma_rule, run_es
 from .mo_mgda_openes import min_norm_simplex
 
+GRAD_NORMS = ("none", "loss2")
 
-def mgda2_aggregate(J: torch.Tensor, drop_eps: float = 0.1) -> Tuple[torch.Tensor, torch.Tensor]:
-    """MGDA after dropping the negligible rows of ``J`` (``[K, D]``); return ``(d, alpha)`` with ``d = J^T alpha``
-    and ``alpha = 0`` on the dropped objectives (see module docstring)."""
+
+def mgda2_aggregate(J: torch.Tensor, drop_eps: float = 0.1,
+                    losses: Optional[np.ndarray] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    """MGDA after dropping the negligible rows of ``J`` (``[K, D]``); return ``(d, w)`` with ``d = J^T w`` and
+    ``w = 0`` on the dropped objectives (see module docstring). With ``losses`` (MGDA2-LN2) the test and the min-norm
+    problem use ``g_k / L_k`` and ``w_k = (alpha_k / L_k) / sum_j (alpha_j / L_j)``."""
+    if losses is not None:
+        inv = torch.as_tensor(1.0 / np.maximum(np.asarray(losses, dtype=np.float64), 1e-12), dtype=J.dtype)
+        _, alpha = mgda2_aggregate(J * inv.unsqueeze(1), drop_eps)
+        w = alpha * inv / (alpha * inv).sum().clamp_min(1e-30)
+        return w @ J, w
     M = (J @ J.T).double().numpy()
     norms = np.sqrt(np.clip(np.diag(M), 0.0, None))
     active = list(range(J.shape[0]))
@@ -70,19 +79,23 @@ class MGDA2Jacobian:
 
     aggregator = "mgda2"
 
-    def __init__(self, drop_eps: float = 0.1):
+    def __init__(self, drop_eps: float = 0.1, grad_norm: str = "none"):
         if drop_eps < 0:
             raise ValueError(f"drop_eps must be >= 0, got {drop_eps}")
-        self.drop_eps = float(drop_eps)
+        if grad_norm not in GRAD_NORMS:
+            raise ValueError(f"Unknown MGDA2 grad_norm {grad_norm!r}; options: {GRAD_NORMS}")
+        self.drop_eps, self.grad_norm = float(drop_eps), grad_norm
+        self.losses = None  # population-mean losses of the last estimate (loss2)
 
     def estimate(self, F: np.ndarray, eps: torch.Tensor, scale: Any, fitness_shaping: str):
         shaped = shape_fitness(F, fitness_shaping)  # [N, K]
         J = shaped.T @ eps * scale  # [K, D]
-        direction, w = mgda2_aggregate(J, self.drop_eps)
+        self.losses = F.mean(axis=0) if self.grad_norm == "loss2" else None
+        direction, w = mgda2_aggregate(J, self.drop_eps, self.losses)
         return J, direction, w, shaped @ w
 
     def true_direction(self, J_true: torch.Tensor) -> torch.Tensor:
-        return mgda2_aggregate(J_true, self.drop_eps)[0]
+        return mgda2_aggregate(J_true, self.drop_eps, self.losses)[0]
 
 
 def run_mo_mgda2_openes(
@@ -95,6 +108,7 @@ def run_mo_mgda2_openes(
     sigma_min: float = 0.0,
     sigma_schedule: str = "constant",
     drop_eps: float = 0.1,
+    grad_norm: str = "none",
     noise_sampler: Optional[Any] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
@@ -108,9 +122,14 @@ def run_mo_mgda2_openes(
     drop_eps : float
         Drop the smallest pseudo-gradient while its norm is below ``drop_eps`` times the norm of the MGDA direction
         of the others (``0``: plain MGDA).
+    grad_norm : str
+        ``"none"`` (default) or ``"loss2"`` (MGDA2-LN2): the test and the min-norm problem on ``g_k / L_k``
+        (``L_k``: population-mean loss, must be positive) and the step with the weights ``alpha_k / L_k``
+        normalized to sum to one, as MO-MGDA(LN2).
     noise_sampler : object, optional
         Replaces the isotropic noise (Guided ES, :func:`~.mo_mgda2_guidedes.run_mo_mgda2_guidedes`).
     """
     rule = make_sigma_rule(sigma, sigma_decay, sigma_min, sigma_schedule, num_iterations)
-    return run_es(trainer, train_dataloaders, "MO-MGDA2-OpenES", MGDA2Jacobian(drop_eps), rule, num_iterations,
+    method = "MO-MGDA2-LN2-OpenES" if grad_norm == "loss2" else "MO-MGDA2-OpenES"
+    return run_es(trainer, train_dataloaders, method, MGDA2Jacobian(drop_eps, grad_norm), rule, num_iterations,
                   pop_size, sigma=sigma, noise_sampler=noise_sampler, **kwargs)

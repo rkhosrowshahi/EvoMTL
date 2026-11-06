@@ -1,6 +1,6 @@
 """OpenES-family ES on the synthetic problems of :mod:`problems`.
 
-* ``nashmtl``: the 2-D toy problem of Nash-MTL (Navon et al. 2022; a modification of CAGrad's toy), with the protocol of
+* ``vb``: the Valley-Bowl problem (2-D, two tasks; introduced with CAGrad), with the protocol of Nash-MTL's
   ``experiments/toy/trainer.py`` of https://github.com/AvivNavon/nash-mtl: the five initial points, Adam with lr 1e-3
   on ``x``, 35,000 iterations and ``scale = 0.1`` on the first loss (configs in ``configs/`` and ``configs/scale_1/``).
 * ``ewq``, ``cqf``, ``cqf2``, ``hqf``, ``mn2``, ``mn20``: the quadratic problems of the UPGrad trajectory plots
@@ -10,13 +10,13 @@
 Here the gradient is replaced by the ES direction of each algorithm, run through the unchanged runners of
 :mod:`LibMTL.evomtl.moea` (see ``trainer.py``); the gradient methods' plots of the papers are the reference.
 
-Every run is described by a YAML file (``moea``: the runner, ``problem``: ``name`` (default ``nashmtl``) and its
+Every run is described by a YAML file (``moea``: the runner, ``problem``: ``name`` (default ``vb``) and its
 settings, ``seeds``, ``es``: keyword arguments of the runner, ``save_path``; optional ``inits`` replaces the problem's
 initial points). Each config runs from every initial point with every seed and writes ``<save_path>/trajectories.npz``
 (search-mean trajectories in x-space and their losses), ``summary.json`` (final points and losses, distances to the
 Pareto front in loss space and to the Pareto set in parameter space) and a copy of the config.
 
-``problem.loss_offset`` (21 in the ``nashmtl`` configs: both losses positive everywhere; f2 >= -20, f1 >= -2 with
+``problem.loss_offset`` (21 in the ``vb`` configs: both losses positive everywhere; f2 >= -20, f1 >= -2 with
 scale 0.1) is a constant added to both losses. It changes no method except MO-MGDA(LN), which divides each pseudo-gradient by its loss
 and needs positive losses (the Pareto front of this problem is entirely negative). Trajectories and reported losses
 are in the original, unshifted units.
@@ -60,6 +60,8 @@ from LibMTL.evomtl.moea import (  # noqa: E402
     run_guidedes,
     run_mo_cagrad_guidedes,
     run_mo_cagrad_openes,
+    run_mo_camgda_guidedes,
+    run_mo_camgda_openes,
     run_mo_mean_guidedes,
     run_mo_mean_openes,
     run_mo_mgda2_guidedes,
@@ -70,12 +72,13 @@ from LibMTL.evomtl.moea import (  # noqa: E402
     run_mo_upgrad_openes,
     run_openes,
 )
-from problems import NASHMTL_INITS, NASHMTL_PARETO_X2, NashMTLToy, make_problem  # noqa: E402
+from problems import VB_INITS, VB_PARETO_X2, ValleyBowl, make_problem  # noqa: E402
 from trainer import ToyTrainer  # noqa: E402
 
-# the Nash-MTL toy (utils.py and the reports): initial points of experiments/toy/trainer.py and its Pareto set
-INITS = NASHMTL_INITS
-PARETO_X2 = NASHMTL_PARETO_X2  # Pareto set: x2 = PARETO_X2, x1 in [-7, 7] (experiments/toy/utils.py)
+# the Valley-Bowl problem (utils.py and the reports): initial points of Nash-MTL's experiments/toy/trainer.py and
+# its Pareto set
+INITS = VB_INITS
+PARETO_X2 = VB_PARETO_X2  # Pareto set: x2 = PARETO_X2, x1 in [-7, 7] (Nash-MTL's experiments/toy/utils.py)
 
 RUNNERS = {
     "openes": run_openes,
@@ -90,12 +93,14 @@ RUNNERS = {
     "mo_cagrad_guidedes": run_mo_cagrad_guidedes,
     "mo_mgda2_openes": run_mo_mgda2_openes,
     "mo_mgda2_guidedes": run_mo_mgda2_guidedes,
+    "mo_camgda_openes": run_mo_camgda_openes,
+    "mo_camgda_guidedes": run_mo_camgda_guidedes,
 }
 
 
 def pareto_front(scale: float, n: int = 2000) -> np.ndarray:
-    """``[n, 2]`` losses along the Pareto set of the Nash-MTL toy."""
-    return NashMTLToy(scale=scale).pareto_front(n)
+    """``[n, 2]`` losses along the Pareto set of the Valley-Bowl problem."""
+    return ValleyBowl(scale=scale).pareto_front(n)
 
 
 def problem_of(cfg: dict):
