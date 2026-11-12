@@ -1,0 +1,27 @@
+# MO-SVD-PGA-OpenES on MN2, the multinorm, a = (1, 10), of the UPGrad trajectory plots
+# (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
+# Their protocol with the ES direction in place of the aggregated Jacobian: their initial points, SGD with
+# lr = 0.02 (their rate for MN2) x 1 (aggregator svd_pga), 50 iterations.
+# Losses are >= 0 (no offset needed); the ES estimate of a quadratic's gradient is unbiased for any sigma.
+# SVD-PGA: average of the oriented, unit-norm principal directions of the pseudo-gradients (ported from TorchJD).
+
+name: MO-SVD-PGA-OpenES
+moea: mo_svd_pga_openes
+problem:
+  name: mn2
+  loss_offset: 0.0
+seeds: [1, 2, 3]
+es:
+  num_iterations: 50
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.02
+  optim: sgd
+  sgd_momentum: 0.0
+  fitness_shaping: raw
+  antithetic: true
+  pga_rank: 2                   # at most 2 principal directions (TorchJD trajectory experiments)
+  pga_scale: none               # unit-scale direction (mean_norm: times the mean pseudo-gradient norm)
+save_path: examples/toy/results/mn2/evo/mo_svd_pga_openes/

@@ -1,0 +1,19 @@
+# MGDA (L2 Norm) (gradient descent, LibMTL weighting MGDA) on CQF2, the convex quadratic form, second variant.
+# The protocol of configs/cqf2/evo/mo_mgda_l2_norm_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# MGDA (L2 Norm) on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# MGDA with grad_norm l2 (Sener & Koltun 2018; LibMTL's mgda_gn): each gradient divided by its norm.
+
+name: MGDA (L2 Norm)
+weighting: MGDA
+weight_args:
+  mgda_gn: l2
+problem:
+  name: cqf2
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 200
+  optim: sgd
+  lr: 0.25
+  sgd_momentum: 0.0
+save_path: examples/toy/results/cqf2/grad/mgda_l2_norm/

@@ -1,0 +1,19 @@
+# CAGrad (gradient descent, LibMTL weighting CAGrad) on MN2, the multinorm, a = (1, 10).
+# The protocol of configs/mn2/evo/mo_cagrad_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# CAGrad on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+
+name: CAGrad
+weighting: CAGrad
+weight_args:
+  calpha: 0.5
+  rescale: 1
+problem:
+  name: mn2
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 50
+  optim: sgd
+  lr: 0.02
+  sgd_momentum: 0.0
+save_path: examples/toy/results/mn2/grad/cagrad/

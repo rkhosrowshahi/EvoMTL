@@ -1,10 +1,10 @@
-# MO-MGDA(LN)-OpenES on EWQ, the element-wise quadratic f = (x1^2, x2^2), of the UPGrad trajectory plots
+# MO-MGDA (Loss Norm)-OpenES on EWQ, the element-wise quadratic f = (x1^2, x2^2), of the UPGrad trajectory plots
 # (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
-# Their initial points with the Adam protocol of the Nash-MTL configs (configs/mo_mgda_loss_openes.yaml): Adam lr 1e-3 for
-# every method, 35,000 iterations; the SGD protocol of the reference is configs/ewq/mo_mgda_loss_openes.yaml.
+# Their initial points with the Adam protocol of the Nash-MTL configs (configs/vb01/evo/mo_mgda_loss_norm_openes.yaml): Adam lr 1e-3 for
+# every method, 35,000 iterations; the SGD protocol of the reference is configs/ewq/evo/mo_mgda_loss_norm_openes.yaml.
 # Losses are >= 0 (no offset needed).
 
-name: MO-MGDA(LN)-OpenES
+name: MO-MGDA (Loss Norm)-OpenES
 moea: mo_mgda_openes
 problem:
   name: ewq
@@ -25,4 +25,4 @@ es:
   direction: mgda
   grad_norm: loss
   stationary_tol: 0.05
-save_path: examples/toy/logs/ewq_adam/mo_mgda_loss_openes/
+save_path: examples/toy/results/ewq/evo/adam_lr1e-3/mo_mgda_loss_norm_openes/

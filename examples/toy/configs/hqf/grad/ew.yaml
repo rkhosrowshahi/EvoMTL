@@ -1,0 +1,19 @@
+# EW (gradient descent, LibMTL weighting EW) on HQF, the homogeneous quadratic form.
+# The protocol of configs/hqf/evo/openes.yaml (initial points, optimizer, iterations) with
+# EW on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# Learning rate 0.005 / 2 = 0.0025: LibMTL's EW steps along the sum of the losses, the reference
+# along the mean (Mean), so the steps are the reference's.
+
+name: EW
+weighting: EW
+weight_args: {}
+problem:
+  name: hqf
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 100
+  optim: sgd
+  lr: 0.0025
+  sgd_momentum: 0.0
+save_path: examples/toy/results/hqf/grad/ew/

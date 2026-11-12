@@ -1,11 +1,11 @@
-# MO-MGDA(LN)-OpenES on MN20, the multinorm, a = (1, ..., 20), 20 objectives, of the UPGrad trajectory plots
+# MO-MGDA (Loss Norm)-OpenES on MN20, the multinorm, a = (1, ..., 20), 20 objectives, of the UPGrad trajectory plots
 # (Quinton & Rey 2024, https://github.com/SimplexLab/trajectories; examples/toy/problems.py).
-# Their initial points with the Adam protocol of the Nash-MTL configs (configs/mo_mgda_loss_openes.yaml): Adam lr 1e-3 for
-# every method, 35,000 iterations; the SGD protocol of the reference is configs/mn20/mo_mgda_loss_openes.yaml.
+# Their initial points with the Adam protocol of the Nash-MTL configs (configs/vb01/evo/mo_mgda_loss_norm_openes.yaml): Adam lr 1e-3 for
+# every method, 35,000 iterations; the SGD protocol of the reference is configs/mn20/evo/mo_mgda_loss_norm_openes.yaml.
 # Losses are >= 0 (no offset needed).
-# pop_size 64 (D = 20), as in configs/mn20/mo_mgda_loss_openes.yaml.
+# pop_size 64 (D = 20), as in configs/mn20/evo/mo_mgda_loss_norm_openes.yaml.
 
-name: MO-MGDA(LN)-OpenES
+name: MO-MGDA (Loss Norm)-OpenES
 moea: mo_mgda_openes
 problem:
   name: mn20
@@ -26,4 +26,4 @@ es:
   direction: mgda
   grad_norm: loss
   stationary_tol: 0.05
-save_path: examples/toy/logs/mn20_adam/mo_mgda_loss_openes/
+save_path: examples/toy/results/mn20/evo/mo_mgda_loss_norm_openes_adam/

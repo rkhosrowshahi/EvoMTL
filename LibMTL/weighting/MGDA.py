@@ -118,6 +118,8 @@ class MGDA(AbsWeighting):
             gn = torch.ones_like(loss_data).to(self.device)
         else:
             raise ValueError('No support normalization type {} for MGDA'.format(ntype))
+        # a task at its minimum (zero loss and gradient) would divide 0 by 0: its row stays zero instead of NaN
+        gn = torch.where(gn == 0, torch.full_like(gn, 1e-12), gn)
         grads = grads / gn.unsqueeze(1).repeat(1, grads.size()[1])
         return grads
     

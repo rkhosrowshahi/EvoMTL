@@ -1,14 +1,14 @@
-# MO-MGDA(LN)-OpenES on the Valley-Bowl (VB) problem (protocol of Nash-MTL's experiments/toy): MO-MGDA-OpenES with each pseudo-gradient divided by its loss before MGDA (LibMTL
+# MO-MGDA (Loss Norm)-OpenES on the Valley-Bowl (VB) problem (protocol of Nash-MTL's experiments/toy): MO-MGDA-OpenES with each pseudo-gradient divided by its loss before MGDA (LibMTL
 # mgda_gn loss); needs positive losses, hence problem.loss_offset.
 # Protocol of experiments/toy/trainer.py: five initial points, Adam lr 1e-3 on x, 35,000 iterations, scale 0.1.
 
-name: MO-MGDA(LN)-OpenES
+name: MO-MGDA (Loss Norm)-OpenES
 moea: mo_mgda_openes
 
 # Toy problem
 problem:
-  scale: 0.1                    # scale of the first loss (Nash-MTL default)
-  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA(LN) only
+  name: vb01                    # Valley-Bowl, scale 0.1 on the first loss (Nash-MTL default)
+  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA (Loss Norm) only
 
 seeds: [1, 2, 3]
 
@@ -26,8 +26,8 @@ es:
   fitness_shaping: raw          # keeps the size of each pseudo-gradient
   antithetic: true
   direction: mgda               # min-norm common descent direction
-  grad_norm: loss               # divide each pseudo-gradient by its loss (MGDA(LN))
+  grad_norm: loss               # divide each pseudo-gradient by its loss (MGDA (Loss Norm))
   stationary_tol: 0.05          # flag Pareto-stationary when ||d|| <= 0.05 max_j ||g_j||
 
 # Paths (relative to the repository root)
-save_path: examples/toy/logs/mo_mgda_loss_openes/
+save_path: examples/toy/results/vb01/evo/mo_mgda_loss_norm_openes/

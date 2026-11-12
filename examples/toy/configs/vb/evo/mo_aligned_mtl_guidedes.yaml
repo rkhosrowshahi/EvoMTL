@@ -1,0 +1,36 @@
+# MO-Aligned-MTL-GuidedES on the Valley-Bowl (VB) problem (protocol of Nash-MTL's experiments/toy): one OpenES pseudo-gradient per objective (raw fitness), combined by Aligned-MTL.
+# Same settings as mo_aligned_mtl_openes.yaml plus Guided ES sampling along the moving average of past ES directions.
+# Protocol of experiments/toy/trainer.py (five initial points, Adam lr 1e-3 on x, 35,000 iterations) without the
+# scale on the first loss, as in Fig. 1 of Aligned-MTL (Senushkin et al., CVPR 2023).
+
+name: MO-Aligned-MTL-GuidedES
+moea: mo_aligned_mtl_guidedes
+
+# Toy problem
+problem:
+  name: vb                      # Valley-Bowl, no scale on the first loss (Aligned-MTL, CAGrad)
+  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA (Loss Norm) only
+
+seeds: [1, 2, 3]
+
+# Evolution strategy: keyword arguments of the runner (LibMTL.evomtl.moea.run_mo_aligned_mtl_guidedes)
+es:
+  num_iterations: 35000
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.001
+  optim: adam                   # optimizer on the search mean (sgd, adam or rmsprop); lr is its learning rate
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+  fitness_shaping: raw          # keeps the size of each pseudo-gradient
+  antithetic: true
+  guided_k: 1                   # one guiding direction (the moving average below)
+  guided_alpha: 0.9             # fraction of the noise budget kept isotropic
+  guided_sigma: 0.05            # perturbation size along the guiding direction
+  guided_ema: 0.9               # guide = moving average of past ES directions with this decay
+  aligned_mtl_scale_mode: min        # eigenvalue scaling the balance transformation (TorchJD default)
+
+# Paths (relative to the repository root)
+save_path: examples/toy/results/vb/evo/mo_aligned_mtl_guidedes/

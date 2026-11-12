@@ -7,8 +7,8 @@ moea: mo_cagrad_openes
 
 # Toy problem
 problem:
-  scale: 1.0                    # no scale on the first loss (Aligned-MTL, CAGrad)
-  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA(LN) only
+  name: vb                      # Valley-Bowl, no scale on the first loss (Aligned-MTL, CAGrad)
+  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA (Loss Norm) only
 
 seeds: [1, 2, 3]
 
@@ -29,4 +29,4 @@ es:
   cagrad_rescale: 1             # divide the direction by 1 + c^2 (LibMTL default)
 
 # Paths (relative to the repository root)
-save_path: examples/toy/logs/scale_1/mo_cagrad_openes/
+save_path: examples/toy/results/vb/evo/mo_cagrad_openes/

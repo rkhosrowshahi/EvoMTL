@@ -1,0 +1,19 @@
+# Aligned-MTL (gradient descent, LibMTL weighting Aligned_MTL) on HQF, the homogeneous quadratic form.
+# The protocol of configs/hqf/evo/mo_aligned_mtl_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# Aligned-MTL on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# Learning rate 0.02 / 2 = 0.01: LibMTL's Aligned_MTL steps along B 1, the reference
+# along B 1 / K, so the steps are the reference's.
+
+name: Aligned-MTL
+weighting: Aligned_MTL
+weight_args: {}
+problem:
+  name: hqf
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 100
+  optim: sgd
+  lr: 0.01
+  sgd_momentum: 0.0
+save_path: examples/toy/results/hqf/grad/aligned_mtl/

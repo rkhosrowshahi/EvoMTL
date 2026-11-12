@@ -1,0 +1,20 @@
+# MGDA (Loss Norm) (gradient descent, LibMTL weighting MGDA) on the Valley-Bowl problem, scale 0.1 (Nash-MTL).
+# The protocol of configs/vb01/evo/mo_mgda_loss_norm_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# MGDA (Loss Norm) on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# MGDA with grad_norm loss (Sener & Koltun 2018; LibMTL's mgda_gn): each gradient divided by its loss.
+
+name: MGDA (Loss Norm)
+weighting: MGDA
+weight_args:
+  mgda_gn: loss
+problem:
+  name: vb01
+  loss_offset: 21.0
+seeds: [1]
+grad:
+  num_iterations: 35000
+  optim: adam
+  lr: 0.001
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-08
+save_path: examples/toy/results/vb01/grad/mgda_loss_norm/

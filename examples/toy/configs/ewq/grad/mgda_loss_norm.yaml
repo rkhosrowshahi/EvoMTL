@@ -1,0 +1,19 @@
+# MGDA (Loss Norm) (gradient descent, LibMTL weighting MGDA) on EWQ, the element-wise quadratic.
+# The protocol of configs/ewq/evo/mo_mgda_loss_norm_openes.yaml (initial points, optimizer, iterations; the reference learning rate) with
+# MGDA (Loss Norm) on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# MGDA with grad_norm loss (Sener & Koltun 2018; LibMTL's mgda_gn): each gradient divided by its loss.
+
+name: MGDA (Loss Norm)
+weighting: MGDA
+weight_args:
+  mgda_gn: loss
+problem:
+  name: ewq
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 50
+  optim: sgd
+  lr: 0.15
+  sgd_momentum: 0.0
+save_path: examples/toy/results/ewq/grad/mgda_loss_norm/

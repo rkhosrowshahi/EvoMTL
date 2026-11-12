@@ -1,0 +1,20 @@
+# OS-NMF-PGA (gradient descent, LibMTL weighting OS_NMF_PGA) on MN20, the multinorm, a = (1, ..., 20), 20 objectives.
+# The protocol of configs/mn20/evo/mo_os_nmf_pga_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# OS-NMF-PGA on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# OS-NMF-PGA: average of the columns of the orthogonal semi-NMF basis of the gradients (TorchJD; rank 2, as its trajectory experiments).
+
+name: OS-NMF-PGA
+weighting: OS_NMF_PGA
+weight_args:
+  PGA_rank: 2
+  PGA_scale: none
+problem:
+  name: mn20
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 500
+  optim: sgd
+  lr: 0.005
+  sgd_momentum: 0.0
+save_path: examples/toy/results/mn20/grad/os_nmf_pga/

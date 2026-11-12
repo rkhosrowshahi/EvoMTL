@@ -1,0 +1,20 @@
+# SVD-PGA (gradient descent, LibMTL weighting SVD_PGA) on MN20, the multinorm, a = (1, ..., 20), 20 objectives.
+# The protocol of configs/mn20/evo/mo_svd_pga_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# SVD-PGA on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# SVD-PGA: average of the oriented, unit-norm principal directions of the gradients (TorchJD; rank 2, as its trajectory experiments).
+
+name: SVD-PGA
+weighting: SVD_PGA
+weight_args:
+  PGA_rank: 2
+  PGA_scale: none
+problem:
+  name: mn20
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 500
+  optim: sgd
+  lr: 0.005
+  sgd_momentum: 0.0
+save_path: examples/toy/results/mn20/grad/svd_pga/

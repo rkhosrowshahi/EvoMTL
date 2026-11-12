@@ -102,6 +102,17 @@ _parser.add_argument('--UPGrad_norm_eps', type=float, default=0.0001,
                      help='A small value to avoid division by zero when normalizing.')
 _parser.add_argument('--UPGrad_reg_eps', type=float, default=0.0001,
                      help='A small value to add to the diagonal of the gramian to make it positive definite.')
+## DualProj
+_parser.add_argument('--DualProj_norm_eps', type=float, default=0.0001,
+                     help='A small value to avoid division by zero when normalizing.')
+_parser.add_argument('--DualProj_reg_eps', type=float, default=0.0001,
+                     help='A small value to add to the diagonal of the gramian to make it positive definite.')
+## SVD_PGA, OS_NMF_PGA
+_parser.add_argument('--PGA_rank', type=int, default=None,
+                     help='Number of principal directions kept by SVD_PGA / OS_NMF_PGA (default: all).')
+_parser.add_argument('--PGA_scale', type=str, default='none', choices=('none', 'mean_norm'),
+                     help='Length of the SVD_PGA / OS_NMF_PGA update: none = average of the unit-norm directions, '
+                          'mean_norm = times the mean norm of the task gradients.')
 
 #### bilevel methods
 _parser.add_argument('--outer_lr', type=float, default=1e-3, help='outer lr')
@@ -486,7 +497,8 @@ def prepare_args(params):
     if params.weighting in ['EW', 'UW', 'GradNorm', 'GLS', 'RLW', 'MGDA', 'IMTL',
                             'PCGrad', 'GradVac', 'CAGrad', 'GradDrop', 'DWA', 
                             'Nash_MTL', 'MoCo', 'Aligned_MTL', 'DB_MTL', 'STCH', 
-                            'ExcessMTL', 'FairGrad', 'FAMO', 'MoDo', 'SDMGrad', 'UPGrad']:
+                            'ExcessMTL', 'FairGrad', 'FAMO', 'MoDo', 'SDMGrad', 'UPGrad', 'DualProj',
+                            'SVD_PGA', 'OS_NMF_PGA']:
         if params.weighting in ['DWA']:
             if params.T is not None:
                 kwargs['weight_args']['T'] = params.T
@@ -557,6 +569,12 @@ def prepare_args(params):
         elif params.weighting in ['UPGrad']:
             kwargs['weight_args']['UPGrad_norm_eps'] = params.UPGrad_norm_eps
             kwargs['weight_args']['UPGrad_reg_eps'] = params.UPGrad_reg_eps
+        elif params.weighting in ['DualProj']:
+            kwargs['weight_args']['DualProj_norm_eps'] = params.DualProj_norm_eps
+            kwargs['weight_args']['DualProj_reg_eps'] = params.DualProj_reg_eps
+        elif params.weighting in ['SVD_PGA', 'OS_NMF_PGA']:
+            kwargs['weight_args']['PGA_rank'] = params.PGA_rank
+            kwargs['weight_args']['PGA_scale'] = params.PGA_scale
     elif params.weighting in ['MOML', 'FORUM', 'AutoLambda']:
         kwargs['weight_args']['outer_lr'] = params.outer_lr
         kwargs['weight_args']['inner_step'] = params.inner_step

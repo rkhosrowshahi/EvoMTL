@@ -1,0 +1,21 @@
+# SDMGrad (LibMTL weighting ``SDMGrad``; Xiao et al., NeurIPS 2023), gradient descent on the exact gradients, on the
+# Valley-Bowl problem, scale 1. The protocol of the other grad configs (initial points, Adam lr 1e-3, 35,000
+# iterations), the weighting run as in the other examples' trainers (weighting + weight_args, LibMTL's defaults);
+# seeded, one seed.
+
+name: SDMGrad
+weighting: SDMGrad
+weight_args:
+  SDMGrad_lamda: 0.3
+  SDMGrad_niter: 20
+problem:
+  name: vb
+  loss_offset: 21.0
+seeds: [1]
+grad:
+  num_iterations: 35000
+  optim: adam
+  lr: 0.001
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-08
+save_path: examples/toy/results/vb/grad/sdmgrad/

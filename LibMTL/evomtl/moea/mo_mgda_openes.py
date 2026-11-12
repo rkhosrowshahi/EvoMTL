@@ -18,8 +18,8 @@ objective; the generation is flagged ``stationary`` (``||d|| <= stationary_tol *
 where a Pareto exploration mode would take over (not part of this module: the step is still taken).
 
 ``grad_norm`` divides each pseudo-gradient by a normalizer before the direction is computed, as LibMTL's MGDA
-``mgda_gn`` (Sener & Koltun 2018): its loss (``loss``, the MGDA-Loss variant), its norm (``l2``, MGDA-GN) or both
-(``loss+``). The step is then ``sum_k alpha_k g_k / n_k``: with ``loss`` its length scales as ``1 / L``, so it
+``mgda_gn`` (Sener & Koltun 2018): its absolute loss ``|L_k|`` (``loss``, the MGDA-Loss variant), its norm (``l2``,
+MGDA-GN) or both (``loss+``). The step is then ``sum_k alpha_k g_k / n_k``: with ``loss`` its length scales as ``1 / L``, so it
 vanishes when the losses are large and grows without bound as they go to zero (under SGD). ``loss2`` (LN2) keeps the
 direction of ``loss`` and takes the step with the weights ``alpha_k / L_k`` normalized to sum to one,
 
@@ -97,10 +97,10 @@ GRAD_NORMS = ("none", "loss", "l2", "loss+", "loss2")
 
 def gradient_normalizers(F: np.ndarray, G: torch.Tensor, grad_norm: str) -> torch.Tensor:
     """Per-objective divisors of the pseudo-gradients before MGDA (LibMTL ``MGDA`` ``mgda_gn``; Sener & Koltun
-    2018): ``loss`` = the loss ``L_k`` (population mean, an estimate of the smoothed loss at ``theta``), ``l2`` =
-    ``||g_k||``, ``loss+`` = ``L_k ||g_k||``, ``none`` = 1; ``loss2`` (LN2) = ``loss``, the step is rescaled in
-    the loop."""
-    loss = torch.as_tensor(F.mean(axis=0), dtype=torch.float32).clamp_min(1e-12)
+    2018): ``loss`` = the absolute loss ``|L_k|`` (population mean, an estimate of the smoothed loss at ``theta``;
+    absolute, so a negative loss does not flip or blow up its pseudo-gradient), ``l2`` = ``||g_k||``, ``loss+`` =
+    ``|L_k| ||g_k||``, ``none`` = 1; ``loss2`` (LN2) = ``loss``, the step is rescaled in the loop."""
+    loss = torch.as_tensor(np.abs(F.mean(axis=0)), dtype=torch.float32).clamp_min(1e-12)
     if grad_norm in ("loss", "loss2"):
         return loss
     if grad_norm == "l2":
@@ -152,9 +152,9 @@ def unit_contributions(shaped: torch.Tensor, antithetic: bool) -> torch.Tensor:
 def debiased_gramian(G: torch.Tensor, coef: torch.Tensor, eps_units: torch.Tensor, sigma: float) -> np.ndarray:
     """Unbiased estimate of the true Gramian ``g_i . g_j`` (U-statistic, see module docstring); may be indefinite."""
     n = coef.shape[0]
-    M = (G @ G.T).double().numpy()
-    sq = (eps_units.double() ** 2).sum(dim=1) / sigma ** 2  # |eps_u|^2 / sigma^2
-    c = coef.double()
+    M = (G @ G.T).numpy()
+    sq = (eps_units ** 2).sum(dim=1) / sigma ** 2  # |eps_u|^2 / sigma^2
+    c = coef
     S = (c.T * sq) @ c  # sum_u h_ui . h_uj
     return (n * n * M - S.numpy()) / (n * (n - 1))
 
@@ -388,7 +388,7 @@ def run_mo_mgda_openes(
         G = shaped.T @ eps / (pop_size * sigma)
         gn = normalizers(F, G, grad_norm)  # [K]; scaling shaped keeps G, coef and the covariances consistent
         shaped, G = shaped / gn, G / gn.unsqueeze(1)
-        M = (G @ G.T).double().numpy()
+        M = (G @ G.T).numpy()
         g_max = float(np.sqrt(np.max(np.diag(M))))
         # sampling units u: mean_u h_uj = g_j, h_uj = coef_uj eps_u / sigma
         coef = unit_contributions(shaped, antithetic)  # [n_units, K]
@@ -408,7 +408,7 @@ def run_mo_mgda_openes(
             proj = eps[:n_draw] @ G.T / sigma  # [n_units, K]: G eps_u / sigma
             P = coef.T.unsqueeze(-1) * proj.unsqueeze(0)  # [K(obj j), n_units, K]: G h_uj
             P = P - P.mean(dim=1, keepdim=True)
-            C = (P.transpose(1, 2) @ P / (P.shape[1] - 1) / P.shape[1]).double().numpy()  # G Sigma_j G^T
+            C = (P.transpose(1, 2) @ P / (P.shape[1] - 1) / P.shape[1]).numpy()  # G Sigma_j G^T
             beta, margin = robust_direction(M, C, alpha, float(kappa), float(lam), trust_radius)
             stationary = margin <= 0.0
         d = torch.as_tensor(beta, dtype=torch.float32) @ G  # common descent direction (on the losses)
@@ -423,7 +423,7 @@ def run_mo_mgda_openes(
         if do_save or (grad_cos_freq > 0 and iteration % int(grad_cos_freq) == 0):
             J_true = true_jacobian(trainer, theta.detach(), shared_batches)
             J_true = J_true / normalizers(F, J_true, grad_norm).unsqueeze(1)
-            alpha_true = min_norm((J_true @ J_true.T).double().numpy())
+            alpha_true = min_norm((J_true @ J_true.T).numpy())
             d_true = -torch.as_tensor(alpha_true, dtype=torch.float32) @ J_true
             true_cos = [_cosine(G[k], J_true[k]) for k in range(n_obj)]
             dir_cos = _cosine(d, d_true)

@@ -1,0 +1,21 @@
+# OS-NMF-PGA (gradient descent, LibMTL weighting OS_NMF_PGA) on the Valley-Bowl problem, scale 1.
+# The protocol of configs/vb/evo/mo_os_nmf_pga_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# OS-NMF-PGA on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# OS-NMF-PGA: average of the columns of the orthogonal semi-NMF basis of the gradients (TorchJD; rank 2, as its trajectory experiments).
+
+name: OS-NMF-PGA
+weighting: OS_NMF_PGA
+weight_args:
+  PGA_rank: 2
+  PGA_scale: none
+problem:
+  name: vb
+  loss_offset: 21.0
+seeds: [1]
+grad:
+  num_iterations: 35000
+  optim: adam
+  lr: 0.001
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-08
+save_path: examples/toy/results/vb/grad/os_nmf_pga/

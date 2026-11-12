@@ -1,0 +1,19 @@
+# UPGrad (gradient descent, LibMTL weighting UPGrad) on CQF, the convex quadratic form (Eq. 14 of the UPGrad paper).
+# The protocol of configs/cqf/evo/mo_upgrad_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# UPGrad on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+
+name: UPGrad
+weighting: UPGrad
+weight_args:
+  UPGrad_norm_eps: 0.0001
+  UPGrad_reg_eps: 0.0001
+problem:
+  name: cqf
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 200
+  optim: sgd
+  lr: 0.125
+  sgd_momentum: 0.0
+save_path: examples/toy/results/cqf/grad/upgrad/

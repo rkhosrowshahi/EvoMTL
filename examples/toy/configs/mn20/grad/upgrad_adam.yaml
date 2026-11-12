@@ -1,0 +1,20 @@
+# UPGrad (gradient descent, LibMTL weighting UPGrad) on MN20, the multinorm, a = (1, ..., 20), 20 objectives.
+# The protocol of configs/mn20/evo/mo_upgrad_openes_adam.yaml (initial points, optimizer, learning rate, iterations) with
+# UPGrad on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+
+name: UPGrad
+weighting: UPGrad
+weight_args:
+  UPGrad_norm_eps: 0.0001
+  UPGrad_reg_eps: 0.0001
+problem:
+  name: mn20
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 35000
+  optim: adam
+  lr: 0.001
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-08
+save_path: examples/toy/results/mn20/grad/upgrad_adam/

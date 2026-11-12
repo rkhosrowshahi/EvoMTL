@@ -1,0 +1,19 @@
+# CAGrad (gradient descent, LibMTL weighting CAGrad) on EWQ, the element-wise quadratic.
+# The protocol of configs/ewq/evo/mo_cagrad_openes.yaml (initial points, optimizer, iterations; the reference learning rate) with
+# CAGrad on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+
+name: CAGrad
+weighting: CAGrad
+weight_args:
+  calpha: 0.5
+  rescale: 1
+problem:
+  name: ewq
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 50
+  optim: sgd
+  lr: 0.075
+  sgd_momentum: 0.0
+save_path: examples/toy/results/ewq/grad/cagrad/

@@ -23,4 +23,4 @@ es:
   sgd_momentum: 0.0
   fitness_shaping: raw
   antithetic: true
-save_path: examples/toy/logs/mn20/openes/
+save_path: examples/toy/results/mn20/evo/openes/

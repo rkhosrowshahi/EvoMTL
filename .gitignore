@@ -16,3 +16,6 @@ reports/
 
 # Weights & Biases local run files
 wandb/
+
+# toy benchmark outputs (runs and their plots)
+examples/toy/results/

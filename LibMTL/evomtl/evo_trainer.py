@@ -67,6 +67,10 @@ from .moea.mo_mgda2_openes import run_mo_mgda2_openes
 from .moea.mo_mgda_guidedes import run_mo_mgda_guidedes
 from .moea.mo_mgda_openes import run_mo_mgda_openes
 from .moea.mo_mgda_openes_libmtl import run_mo_mgda_openes_libmtl
+from .moea.mo_aligned_mtl_guidedes import run_mo_aligned_mtl_guidedes
+from .moea.mo_aligned_mtl_openes import run_mo_aligned_mtl_openes
+from .moea.mo_pga_guidedes import run_mo_os_nmf_pga_guidedes, run_mo_svd_pga_guidedes
+from .moea.mo_pga_openes import run_mo_os_nmf_pga_openes, run_mo_svd_pga_openes
 from .moea.mo_upgrad_guidedes import run_mo_upgrad_guidedes
 from .moea.mo_upgrad_openes import run_mo_upgrad_openes
 from .moea.mopso import run_mopso
@@ -88,6 +92,12 @@ ES_RUNNERS = {
     "pgpe": run_pgpe,
     "mo_upgrad_openes": run_mo_upgrad_openes,
     "mo_upgrad_guidedes": run_mo_upgrad_guidedes,
+    "mo_aligned_mtl_openes": run_mo_aligned_mtl_openes,
+    "mo_aligned_mtl_guidedes": run_mo_aligned_mtl_guidedes,
+    "mo_svd_pga_openes": run_mo_svd_pga_openes,
+    "mo_svd_pga_guidedes": run_mo_svd_pga_guidedes,
+    "mo_os_nmf_pga_openes": run_mo_os_nmf_pga_openes,
+    "mo_os_nmf_pga_guidedes": run_mo_os_nmf_pga_guidedes,
     "mo_mean_openes": run_mo_mean_openes,
     "mo_mean_guidedes": run_mo_mean_guidedes,
     "mo_mgda_openes": run_mo_mgda_openes,

@@ -23,4 +23,4 @@ es:
   antithetic: true
   cagrad_alpha: 0.5
   cagrad_rescale: 1
-save_path: examples/toy/logs/cqf/mo_cagrad_openes/
+save_path: examples/toy/results/cqf/evo/mo_cagrad_openes/

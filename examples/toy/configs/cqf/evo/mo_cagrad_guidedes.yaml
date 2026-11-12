@@ -30,4 +30,4 @@ es:
   guided_alpha: 0.9
   guided_sigma: 0.0
   guided_ema: 0.9
-save_path: examples/toy/logs/cqf/mo_cagrad_guidedes/
+save_path: examples/toy/results/cqf/evo/mo_cagrad_guidedes/

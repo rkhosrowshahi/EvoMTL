@@ -25,4 +25,4 @@ es:
   antithetic: true
   upgrad_norm_eps: 0.0001
   upgrad_reg_eps: 0.0001
-save_path: examples/toy/logs/mn20/mo_upgrad_openes/
+save_path: examples/toy/results/mn20/evo/mo_upgrad_openes/

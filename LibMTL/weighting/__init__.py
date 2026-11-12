@@ -22,6 +22,9 @@ from LibMTL.weighting.FAMO import FAMO
 from LibMTL.weighting.MoDo import MoDo
 from LibMTL.weighting.SDMGrad import SDMGrad
 from LibMTL.weighting.UPGrad import UPGrad
+from LibMTL.weighting.DualProj import DualProj
+from LibMTL.weighting.SVD_PGA import SVD_PGA
+from LibMTL.weighting.OS_NMF_PGA import OS_NMF_PGA
 
 __all__ = ['AbsWeighting',
            'EW', 
@@ -46,4 +49,7 @@ __all__ = ['AbsWeighting',
            'FAMO',
            'MoDo',
            'SDMGrad',
-           'UPGrad']
+           'UPGrad',
+           'DualProj',
+           'SVD_PGA',
+           'OS_NMF_PGA']

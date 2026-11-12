@@ -1,6 +1,11 @@
 """Multi-objective evolutionary algorithms used by :class:`~LibMTL.evomtl.evo_trainer.EvoMTLTrainer`."""
 
 from .comocma import run_comocma
+from .mo_pga_guidedes import run_mo_os_nmf_pga_guidedes, run_mo_svd_pga_guidedes
+from .mo_pga_openes import run_mo_os_nmf_pga_openes, run_mo_svd_pga_openes
+from .pga import os_nmf_pga_aggregate, svd_pga_aggregate
+from .mo_aligned_mtl_guidedes import run_mo_aligned_mtl_guidedes
+from .mo_aligned_mtl_openes import aligned_mtl_aggregate, run_mo_aligned_mtl_openes
 from .dcpsl_es import run_dcpsl_es
 from .guidedes import run_guidedes
 from .hv import (
@@ -41,7 +46,16 @@ __all__ = [
     "pareto_center_solution",
     "pareto_center_weights_from_marginal_hv",
     "pareto_front_indices",
+    "aligned_mtl_aggregate",
     "run_comocma",
+    "os_nmf_pga_aggregate",
+    "svd_pga_aggregate",
+    "run_mo_os_nmf_pga_guidedes",
+    "run_mo_os_nmf_pga_openes",
+    "run_mo_svd_pga_guidedes",
+    "run_mo_svd_pga_openes",
+    "run_mo_aligned_mtl_guidedes",
+    "run_mo_aligned_mtl_openes",
     "run_dcpsl_es",
     "run_guidedes",
     "run_mo_cagrad_guidedes",

@@ -8,8 +8,8 @@ moea: mo_mgda_openes
 
 # Toy problem
 problem:
-  scale: 1.0                    # no scale on the first loss (Aligned-MTL, CAGrad)
-  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA(LN) only
+  name: vb                      # Valley-Bowl, no scale on the first loss (Aligned-MTL, CAGrad)
+  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA (Loss Norm) only
 
 seeds: [1, 2, 3]
 
@@ -31,4 +31,4 @@ es:
   stationary_tol: 0.05          # flag Pareto-stationary when ||d|| <= 0.05 max_j ||g_j||
 
 # Paths (relative to the repository root)
-save_path: examples/toy/logs/scale_1/mo_mgda_openes/
+save_path: examples/toy/results/vb/evo/mo_mgda_openes/

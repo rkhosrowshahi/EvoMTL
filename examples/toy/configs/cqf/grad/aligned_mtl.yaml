@@ -1,0 +1,19 @@
+# Aligned-MTL (gradient descent, LibMTL weighting Aligned_MTL) on CQF, the convex quadratic form (Eq. 14 of the UPGrad paper).
+# The protocol of configs/cqf/evo/mo_aligned_mtl_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# Aligned-MTL on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# Learning rate 0.5 / 2 = 0.25: LibMTL's Aligned_MTL steps along B 1, the reference
+# along B 1 / K, so the steps are the reference's.
+
+name: Aligned-MTL
+weighting: Aligned_MTL
+weight_args: {}
+problem:
+  name: cqf
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 200
+  optim: sgd
+  lr: 0.25
+  sgd_momentum: 0.0
+save_path: examples/toy/results/cqf/grad/aligned_mtl/

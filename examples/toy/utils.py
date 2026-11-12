@@ -1,29 +1,36 @@
-"""Figures of the toy runs (``runner.py``, read from ``logs/<config name>/``): objective-space trajectories and convergence to the Pareto front.
+"""Comparison figures of the toy runs of ``main.py`` in one results folder (``results/<problem>/evo/`` or
+``results/<problem>/grad/``, one subfolder per method, as ``tests/trajectories/results/`` of TorchJD; ``--suffix
+_adam``: the ``*_adam`` runs of the folder), saved in ``<fig-dir>``, default ``figures/`` (``figures_adam/``) in the
+results folder. The figures of each run, in ``<method>/figures/``, are made by ``main.py`` (:func:`run_figures`).
+Limits and ticks of the search and value plots: ``SEARCH_PLOT_LIMS`` / ``VALUE_PLOT_LIMS`` of ``constants.py``.
 
-* ``<fig-dir>/traj_<method>.pdf``: one panel per method, the Pareto front (grey) and, for each of the five initial
-  points, the seed-mean trajectory of the losses (orange early to purple late, the colors of Nash-MTL; start = black
-  circle, end = small dot; black star: minimum of the average loss), as in
-  Fig. 1 of Nash-MTL. Each axis fits the data, as in the paper (l1 spans ~10x less than l2 with scale 0.1, so equal
-  axes would flatten the front); the limits are shared by every panel.
-* ``<fig-dir>/convergence_<family>.pdf``: distance of the search mean to the Pareto front (objective space), mean over
-  initial points and seeds, per method of the OpenES / GuidedES family.
-* ``<fig-dir>/overview.png``: every trajectory panel on one grid (quick look).
-* ``<fig-dir>/loss_plane/<method>.pdf``: the figure of ``experiments/toy/trainer.py`` of Nash-MTL
-  (``plot_2d_pareto`` of its ``utils.py``, reproduced in :func:`plot_2d_pareto`), one run per initial point
-  (``--seed``).
-* ``<fig-dir>/3d/<method>.pdf``: the runs (``--seed``) on the surface of the average loss over
-  ``(theta_1, theta_2)``, as in Fig. 1 (bottom row) of Aligned-MTL (:func:`plot_3d`).
-* ``<fig-dir>/contour/<method>.pdf``: the same runs on the contour map of the average loss (:func:`plot_contour`).
-* ``<logs>/summary.tex``: final distance to the front per initial point, mean +- std over seeds.
+Quadratic problems (:func:`problem_figures`):
 
-For the quadratic problems of :mod:`problems` (``logs/<problem>/``) instead: ``<fig-dir>/contour/<method>.pdf``,
-``<fig-dir>/loss/<method>.pdf`` and ``<fig-dir>/convergence_<family>.pdf`` (:func:`problem_figures`; default
-``<fig-dir>`` = ``figures/<problem>``).
+* ``search_plot.pdf``: the runs (``--seed``) on the contour map of the average loss (2-D problems), one subplot per
+  method (a row per family);
+* ``value_plot.pdf``: the same runs in the loss plane (two objectives), one subplot per method;
+* ``ps_dist_convergence_plot_<family>.pdf``: distance of the search mean to the Pareto set against the iteration,
+  per method of the family (OpenES, GuidedES, Grad, LibMTL).
+
+Valley-Bowl problem (``vb``, ``vb01``), each a figure with a subplot per method (a row per family):
+
+* ``value_plot.pdf``: the figure of ``experiments/toy/trainer.py`` of Nash-MTL (``plot_2d_pareto`` of its
+  ``utils.py``, reproduced in :func:`plot_2d_pareto`), one run per initial point (``--seed``);
+* ``value_plot_seed_mean.pdf``: the Pareto front (grey) and, for each initial point, the seed-mean trajectory of the
+  losses (orange early to purple late, the colors of Nash-MTL; start = black circle, end = small dot; black star:
+  minimum of the average loss), as in Fig. 1 of Nash-MTL;
+* ``search_plot_3d.pdf``: the runs (``--seed``) on the surface of the average loss over ``(theta_1, theta_2)``, as in
+  Fig. 1 (bottom row) of Aligned-MTL (:func:`plot_3d`);
+* ``search_plot.pdf``: the same runs on the contour map of the average loss (:func:`contour_panel`);
+* ``pf_dist_convergence_plot_<family>.pdf``: distance of the search mean to the Pareto front (loss space), mean
+  over initial points and seeds, per method of the family;
+* ``<results>/summary<suffix>.tex``: final distance to the front per initial point, mean +- std over seeds.
 
 Usage (from the repository root)::
 
-    python examples/toy/utils.py [--logs examples/toy/logs] [--fig-dir examples/toy/figures/scale_<s>] [--seed 1]
-    python examples/toy/utils.py --logs examples/toy/logs/cqf
+    python examples/toy/utils.py --results examples/toy/results/vb01/evo [--fig-dir ...] [--seed 1]
+    python examples/toy/utils.py --results examples/toy/results/cqf/grad
+    python examples/toy/utils.py --results examples/toy/results/cqf/evo --suffix _adam
 """
 
 from __future__ import annotations
@@ -42,37 +49,32 @@ import matplotlib.ticker  # noqa: E402
 from matplotlib.collections import LineCollection  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[1]))
+sys.path.insert(0, str(HERE))  # first: the toy modules
 
 import torch  # noqa: E402
 import yaml  # noqa: E402
 
-from problem import Toy  # noqa: E402
-from problems import ValleyBowl, make_problem  # noqa: E402
-from runner import PARETO_X2, pareto_front  # noqa: E402
+from constants import (  # noqa: E402
+    COLORS, FAMILIES, FRONT_COLOR, LOSS_PLANE_SPACING, MARKERS, PROBLEMS, SEARCH_PLOT_LIMS, SUFFIXES, TRAJ_CMAP,
+    TRAJ_RANGE, VALUE_PLOT_LIMS,
+)
+from problems import ValleyBowl  # noqa: E402
 
-FAMILIES = {
-    "OpenES": ["openes", "mo_mean_openes", "mo_upgrad_openes", "mo_cagrad_openes", "mo_mgda_openes",
-               "mo_mgda2_openes", "mo_mgda_loss_openes", "mo_mgda_loss2_openes"],
-    "GuidedES": ["guidedes", "mo_mean_guidedes", "mo_upgrad_guidedes", "mo_cagrad_guidedes", "mo_mgda_guidedes",
-                 "mo_mgda2_guidedes", "mo_mgda_loss_guidedes", "mo_mgda_loss2_guidedes"],
-}
-# convergence curves, by position in the family: baseline, MO-Mean, MO-UPGrad, MO-CAGrad, MO-MGDA, MO-MGDA2,
-# MO-MGDA(LN), MO-MGDA(LN2)
-COLORS = ["C0", "C4", "C2", "C1", "C3", "C5", "C7", "C6"]
-MARKERS = ["o", "s", "^", "P", "D", "X", "v", "<"]
-# trajectory panels: the colors of Nash-MTL's plot_2d_pareto for every method
-FRONT_COLOR = "#72727A"
-TRAJ_CMAP, TRAJ_RANGE = matplotlib.cm.magma_r, (0.1, 0.6)  # orange (start) to purple (end)
 
-def position(key: str) -> int:
-    return next(fam.index(key) for fam in FAMILIES.values() if key in fam)
+def set_lims(ax, lims: dict) -> None:
+    """Limits and ticks of an entry of ``SEARCH_PLOT_LIMS`` / ``VALUE_PLOT_LIMS`` (:mod:`constants`)."""
+    ax.set_xlim(*lims["xlim"])
+    ax.set_ylim(*lims["ylim"])
+    if "xticks" in lims:
+        ax.set_xticks(lims["xticks"])
+    if "yticks" in lims:
+        ax.set_yticks(lims["yticks"])
 
 
 def gradient_line(ax, xy: np.ndarray) -> None:
     seg = np.stack([xy[:-1], xy[1:]], axis=1)
-    colors = TRAJ_CMAP(np.linspace(*TRAJ_RANGE, len(seg)))
+    colors = matplotlib.colormaps[TRAJ_CMAP](np.linspace(*TRAJ_RANGE, len(seg)))
     ax.add_collection(LineCollection(seg, colors=colors, linewidth=3, zorder=5))
 
 
@@ -86,26 +88,28 @@ def loss_plane_axes(ax) -> None:
     ax.tick_params(labelsize=20)
 
 
-def plot_convergence(keys: list, dist: dict, names: dict, ylabel: str = "Distance to Pareto front", gens=None):
+def plot_convergence(keys: list, dist: dict, names: dict, ylabel: str = "Distance to Pareto front",
+                     gens: dict = None):
     """Distance to the Pareto front against the generation (``dist[k]``: ``[inits, seeds, T + 1]``, or at the
-    generations ``gens``): mean over the initial points; over the seeds, in log scale (the axis): line = geometric
+    generations ``gens[k]``): mean over the initial points; over the seeds, in log scale (the axis): line = geometric
     mean, band = one standard deviation of log10(distance). Nash-MTL-sized fonts."""
     fig, ax = plt.subplots(figsize=(6, 5))
     for k in keys:
         log_d = np.log10(np.maximum(dist[k].mean(axis=0), 1e-12))  # [seeds, T + 1]
-        mean, std = log_d.mean(axis=0), log_d.std(axis=0, ddof=1)
-        gens = np.arange(len(mean)) if gens is None else gens
-        p = position(k)
-        ax.plot(gens, 10 ** mean, color=COLORS[p], marker=MARKERS[p], markevery=max(1, len(gens) // 8),
+        mean, std = log_d.mean(axis=0), log_d.std(axis=0, ddof=1 if len(log_d) > 1 else 0)  # one seed: no band
+        g = np.arange(len(mean)) if gens is None else gens[k]  # per method: their numbers of iterations may differ
+        method = next((k[:-len(x)] for x in SUFFIXES if k.endswith(x)), k)  # without its protocol suffix (_adam)
+        p = next((fam.index(method) for fam in FAMILIES.values() if method in fam), 0)  # position: color, marker
+        ax.plot(g, 10 ** mean, color=COLORS[p], marker=MARKERS[p], markevery=max(1, len(g) // 8),
                 markersize=9, linewidth=2.5, label=names[k])
-        ax.fill_between(gens, 10 ** (mean - std), 10 ** (mean + std), color=COLORS[p], alpha=0.2, linewidth=0)
+        ax.fill_between(g, 10 ** (mean - std), 10 ** (mean + std), color=COLORS[p], alpha=0.2, linewidth=0)
     ax.set_yscale("log")
     ax.spines[["top", "right"]].set_visible(False)
     ax.set_xlabel("Generation", size=20)
     ax.set_ylabel(ylabel, size=20)
     ax.tick_params(labelsize=16)
     ax.xaxis.get_offset_text().set_fontsize(16)
-    ax.legend(fontsize=12, frameon=False)
+    ax.legend(fontsize=12, frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5))  # right of the axes
     return ax, fig
 
 
@@ -124,12 +128,6 @@ def rasterize_dense(fig, n: int = 1000) -> None:
                 size = max(len(artist.get_offsets()), sum(len(q.vertices) for q in artist.get_paths()))
             if size > n:
                 artist.set_rasterized(True)
-
-
-def optimum_losses(scale: float) -> np.ndarray:
-    """Losses at the minimum of the average loss (marked with a black star in every figure)."""
-    problem = ValleyBowl(scale=scale)
-    return problem.losses(problem.global_optimum())
 
 
 def match_ticks(ax) -> None:
@@ -151,39 +149,42 @@ def extend_to_tick(ax) -> None:
         axis.set_ticks(t[(t >= lo) & (t <= hi)])  # keep the step (a wider range could change it)
 
 
-def traj_panel(ax, key: str, name: str, L: np.ndarray, front: np.ndarray, xlim, ylim, star: np.ndarray) -> None:
+def traj_panel(ax, L: np.ndarray, front: np.ndarray, xlim, ylim, star: np.ndarray) -> None:
     mean = L.mean(axis=1)  # [inits, T + 1, 2]: seed mean
     ax.plot(front[:, 0], front[:, 1], "-", color=FRONT_COLOR, linewidth=8, label="Pareto front", zorder=1)
     ax.scatter(*star, marker="*", s=300, color="k", zorder=11)
     for i in range(mean.shape[0]):
         gradient_line(ax, mean[i])
         ax.scatter(*mean[i, 0], color="k", s=150, zorder=10)
-        ax.scatter(*mean[i, -1], color=TRAJ_CMAP(TRAJ_RANGE[1]), s=30, zorder=10)
+        ax.scatter(*mean[i, -1], color=matplotlib.colormaps[TRAJ_CMAP](TRAJ_RANGE[1]), s=30, zorder=10)
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
     loss_plane_axes(ax)
     match_ticks(ax)
 
 
-def plot_2d_pareto(trajectories: dict, scale: float):
+def plot_2d_pareto(trajectories: dict, problem: ValleyBowl, lims: dict = None, ax=None):
     """``plot_2d_pareto`` of Nash-MTL's ``experiments/toy/utils.py`` (itself adapted from CAGrad), unchanged except:
     ``sns.despine()`` is written out (no seaborn here) and the per-tick ``tick.label.set_fontsize`` (removed from
-    matplotlib) is ``ax.tick_params``. ``trajectories``: ``{i: {"traj": [T, 2] x-space trajectory}}``."""
-    fig, ax = plt.subplots(figsize=(6, 5))
+    matplotlib) is ``ax.tick_params``, and the losses come from :class:`problems.ValleyBowl` (the same function as
+    its ``Toy``). ``trajectories``: ``{i: {"traj": [T, 2] x-space trajectory}}``. ``ax`` (added): draw into this
+    axis (a subplot of :func:`method_grid`), without the layout and legend of a single figure (``legend`` is None)."""
+    single = ax is None
+    fig, ax = plt.subplots(figsize=(6, 5)) if single else (ax.figure, ax)
 
-    F = Toy(scale=scale)
+    F = problem
 
     losses = []
     for res in trajectories.values():
-        losses.append(F.batch_forward(torch.from_numpy(res["traj"])))
+        losses.append(F(torch.from_numpy(res["traj"])))
 
-    yy = -8.3552
+    yy = problem.PARETO_SET_X2  # -8.3552
     x = np.linspace(-7, 7, 1000)
 
     inpt = np.stack((x, [yy] * len(x))).T
-    Xs = torch.from_numpy(inpt).double()
+    Xs = torch.from_numpy(inpt).float()
 
-    Ys = F.batch_forward(Xs)
+    Ys = F(Xs)
     ax.plot(
         Ys.numpy()[:, 0],
         Ys.numpy()[:, 1],
@@ -205,7 +206,8 @@ def plot_2d_pareto(trajectories: dict, scale: float):
         colors = matplotlib.cm.magma_r(np.linspace(0.1, 0.6, tt.shape[0]))
         ax.scatter(tt[:, 0], tt[:, 1], color=colors, s=5, zorder=9)
 
-    ax.scatter(*optimum_losses(scale), marker="*", s=300, color="k", zorder=11)  # minimum of the average (added)
+    # (added) minimum of the average loss
+    ax.scatter(*problem.losses(problem.global_optimum()), marker="*", s=300, color="k", zorder=11)
 
     ax.spines[["top", "right"]].set_visible(False)  # sns.despine()
     ax.set_xlabel(r"$\mathcal{L}_1$", size=30)
@@ -216,6 +218,11 @@ def plot_2d_pareto(trajectories: dict, scale: float):
     ax.tick_params(labelsize=20)
     match_ticks(ax)  # (added)
     extend_to_tick(ax)  # (added)
+    if lims is not None:  # (added) fixed limits and ticks, VALUE_PLOT_LIMS of constants.py
+        set_lims(ax, lims)
+
+    if not single:  # (added) a subplot: the grid sets the layout and one legend
+        return ax, fig, None
 
     plt.tight_layout()
 
@@ -226,36 +233,32 @@ def plot_2d_pareto(trajectories: dict, scale: float):
     return ax, fig, legend
 
 
-def mean_loss(X: np.ndarray, scale: float) -> np.ndarray:
-    """Average of the two losses at the points ``X`` (``[..., 2]``, x-space)."""
-    with torch.no_grad():
-        L = Toy(scale=scale).batch_forward(torch.from_numpy(X.reshape(-1, 2)).double()).numpy()
-    return L.mean(axis=1).reshape(X.shape[:-1])
-
-
-def plot_3d(trajectories: np.ndarray, scale: float, xl: float = 10.0, n: int = 300):
+def plot_3d(trajectories: np.ndarray, problem: ValleyBowl, xl: float = 10.0, n: int = 300, ax=None):
     """Trajectories on the surface of the average loss over ``(theta_1, theta_2)``, as in Fig. 1 (bottom row) of
     Aligned-MTL (Senushkin et al., CVPR 2023): surface ``viridis`` (dark = low, yellow = high), Pareto set (grey line), minimum
     of the average loss (star), runs from yellow (start, black dot) to dark red. ``trajectories``: ``[inits, T, 2]``
-    in x-space."""
+    in x-space. ``ax``: draw into this 3-D axis (``computed_zorder=False``) instead of a new figure."""
     from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
-    fig = plt.figure(figsize=(6, 5))
-    ax = fig.add_subplot(projection="3d", computed_zorder=False)  # draw in zorder: runs on top of the surface
+    if ax is None:
+        fig = plt.figure(figsize=(6, 5))
+        ax = fig.add_subplot(projection="3d", computed_zorder=False)  # draw in zorder: runs on top of the surface
+    else:
+        fig = ax.figure
 
     g = np.linspace(-xl, xl, n)
     T1, T2 = np.meshgrid(g, g)
-    Z = mean_loss(np.stack([T1, T2], axis=-1), scale)
+    Z = problem.losses(np.stack([T1, T2], axis=-1)).mean(axis=-1)
     ax.plot_surface(T1, T2, Z, cmap="viridis", rstride=1, cstride=1, linewidth=0, antialiased=False,
                     rasterized=True, zorder=1)
 
-    ps = np.stack([np.linspace(-7.0, 7.0, 500), np.full(500, PARETO_X2)], axis=1)
-    ax.plot(ps[:, 0], ps[:, 1], mean_loss(ps, scale), color="0.5", linewidth=4, zorder=2)
-    opt = ValleyBowl(scale=scale).global_optimum()
-    ax.scatter(*opt, mean_loss(opt[None], scale)[0], marker="*", s=200, color="k", depthshade=False, zorder=6)
+    ps = problem.pareto_set(500)
+    ax.plot(ps[:, 0], ps[:, 1], problem.losses(ps).mean(axis=-1), color="0.5", linewidth=4, zorder=2)
+    opt = problem.global_optimum()
+    ax.scatter(*opt, problem.losses(opt).mean(), marker="*", s=200, color="k", depthshade=False, zorder=6)
 
     for traj in trajectories:
-        z = mean_loss(traj, scale)
+        z = problem.losses(traj).mean(axis=-1)
         pts = np.column_stack([traj, z])
         seg = np.stack([pts[:-1], pts[1:]], axis=1)
         colors = matplotlib.cm.inferno_r(np.linspace(0.15, 0.85, len(seg)))
@@ -277,24 +280,16 @@ def plot_3d(trajectories: np.ndarray, scale: float, xl: float = 10.0, n: int = 3
     return ax, fig
 
 
-def plot_contour(trajectories: np.ndarray, scale: float, xl: float = 10.0, n: int = 200):
-    """Contour map of the average loss over ``(theta_1, theta_2)`` with the runs, the 2-D counterpart of
-    :func:`plot_3d`: contour lines on white from ``viridis``, dark purple = low, yellow = high; grey Pareto set; black
-    star at the minimum of the average loss; runs from yellow (start, black dot) to dark red (end, small dot). ``trajectories``:
-    ``[inits, T, 2]`` in x-space."""
-    ticks = [-xl, -xl / 2, 0, xl / 2, xl]
-    return contour_panel(ValleyBowl(scale=scale), trajectories, (-xl, xl), (-xl, xl), ticks=ticks, n=n)
-
-
-def contour_panel(problem, trajectories: np.ndarray, xlim, ylim, ticks=None, n: int = 200,
-                  levels="linear"):
-    """:func:`plot_contour` for any 2-D problem of :mod:`problems` over ``xlim`` x ``ylim``: contour lines of the
-    average loss, the Pareto set (grey; a grey dot when it is one point), the minimum of the
-    average loss (black star) and the runs.
+def contour_panel(problem, trajectories: np.ndarray, lims: dict, n: int = 200, levels="linear", ax=None):
+    """Contour map of the average loss over ``(theta_1, theta_2)`` with the runs, for any 2-D problem of
+    :mod:`problems` (the 2-D counterpart of :func:`plot_3d`) over the limits and ticks ``lims`` (an entry of
+    ``SEARCH_PLOT_LIMS`` of :mod:`constants`): contour lines on white from ``viridis``, dark purple = low, yellow =
+    high; the Pareto set (grey; a grey dot when it is one point); the minimum of the average loss (black star); runs
+    from yellow (start, black dot) to dark red (end, small dot). ``trajectories``: ``[inits, T, 2]`` in x-space.
     ``levels``: ``"linear"`` (20 equally spaced) or ``"quantile"`` (at 20 quantiles of the map, for losses that span
-    orders of magnitude)."""
-    fig, ax = plt.subplots(figsize=(5, 5))
-    T1, T2 = np.meshgrid(np.linspace(*xlim, n), np.linspace(*ylim, n))
+    orders of magnitude). ``ax``: draw into this axis (a subplot) instead of a new figure."""
+    fig, ax = plt.subplots(figsize=(5, 5)) if ax is None else (ax.figure, ax)
+    T1, T2 = np.meshgrid(np.linspace(*lims["xlim"], n), np.linspace(*lims["ylim"], n))
     Z = problem.losses(np.stack([T1, T2], axis=-1)).mean(axis=-1)
     if levels == "quantile":
         levels = np.unique(np.quantile(Z, np.linspace(0.0, 1.0, 22)[1:-1]))
@@ -321,12 +316,8 @@ def contour_panel(problem, trajectories: np.ndarray, xlim, ylim, ticks=None, n: 
         ax.scatter(*traj[0], color="k", s=80, zorder=6)
         ax.scatter(*traj[-1], color=colors[-1], s=20, zorder=6)
 
-    ax.set_xlim(*xlim)
-    ax.set_ylim(*ylim)
+    set_lims(ax, lims)
     ax.set_aspect("equal")
-    if ticks is not None:
-        ax.set_xticks(ticks)
-        ax.set_yticks(ticks)
     ax.spines[["top", "right"]].set_visible(False)
     ax.set_xlabel(r"$\theta_1$", size=26, labelpad=0)
     ax.set_ylabel(r"$\theta_2$", size=26, labelpad=0)
@@ -334,13 +325,14 @@ def contour_panel(problem, trajectories: np.ndarray, xlim, ylim, ticks=None, n: 
     return ax, fig
 
 
-def loss_panel(problem, losses: np.ndarray, xlim=None, ylim=None):
+def loss_panel(problem, losses: np.ndarray, lims: dict = None, ax=None):
     """Loss-plane trajectories of a two-objective problem of :mod:`problems` in the style of :func:`plot_2d_pareto`
     (``losses``: ``[inits, T, 2]``, one seed): Pareto front (grey; a grey dot when it is one point), initial points
     (black), every iterate colored from orange (start) to purple (end), end = small dot, losses at the minimum of the
-    average loss (black star). Limits fit the runs and the
-    front unless given."""
-    fig, ax = plt.subplots(figsize=(6, 5))
+    average loss (black star). A line, unlike the scatter points of Nash-MTL's ``plot_2d_pareto`` (Valley-Bowl).
+    Limits and ticks: ``lims`` (``VALUE_PLOT_LIMS`` of :mod:`constants`); fitted to the runs and the front without.
+    ``ax``: draw into this axis (a subplot) instead of a new figure."""
+    fig, ax = plt.subplots(figsize=(6, 5)) if ax is None else (ax.figure, ax)
     front = problem.pareto_front(1000)
     if np.ptp(front, axis=0).max() < 1e-9:
         ax.scatter(*front[0], color=FRONT_COLOR, s=250, zorder=1)
@@ -350,163 +342,234 @@ def loss_panel(problem, losses: np.ndarray, xlim=None, ylim=None):
     for L in losses:
         gradient_line(ax, L)
         ax.scatter(*L[0], color="k", s=150, zorder=10)
-        ax.scatter(*L[-1], color=TRAJ_CMAP(TRAJ_RANGE[1]), s=30, zorder=10)
-    if xlim is not None:
-        ax.set_xlim(*xlim)
-    if ylim is not None:
-        ax.set_ylim(*ylim)
-    ax.autoscale_view()
+        ax.scatter(*L[-1], color=matplotlib.colormaps[TRAJ_CMAP](TRAJ_RANGE[1]), s=30, zorder=10)
+    if lims is not None:
+        set_lims(ax, lims)
+    else:
+        ax.autoscale_view()
     loss_plane_axes(ax)
     ax.xaxis.set_label_coords(1.12, -0.03)  # clear of the end tick (as plot_2d_pareto)
     ax.yaxis.set_label_coords(-0.01, 1.09)
     return ax, fig
 
 
-def front_distance(L: np.ndarray, front: np.ndarray, chunk: int = 2048) -> np.ndarray:
-    """Distance of every point of ``L`` (``[..., 2]``) to the sampled Pareto front."""
-    flat = L.reshape(-1, 2)
-    out = np.empty(len(flat))
-    for s in range(0, len(flat), chunk):
-        out[s:s + chunk] = np.linalg.norm(flat[s:s + chunk, None] - front[None], axis=-1).min(axis=1)
-    return out.reshape(L.shape[:-1])
+
+def method_grid(keys_by_family: dict, panel, width: float, height: float, subplot_kw: dict = None,
+                spacing: dict = None, max_cols: int = 8):
+    """One figure with a subplot per method: a row per family (``keys_by_family``: family -> present methods), a
+    column per method; ``panel(key, ax)`` draws a method into its subplot (``subplot_kw``: e.g. a 3-D projection).
+    Unused cells are hidden. ``spacing``: ``wspace`` / ``hspace`` between the panels, applied after the tight layout
+    (e.g. ``LOSS_PLANE_SPACING``). A family of more than ``max_cols`` methods wraps onto several rows."""
+    rows = [(fam, ks[i:i + max_cols]) for fam, ks in keys_by_family.items() for i in range(0, len(ks), max_cols)]
+    n_col = max(len(ks) for _, ks in rows)
+    fig, axes = plt.subplots(len(rows), n_col, figsize=(width * n_col, height * len(rows)), squeeze=False,
+                             subplot_kw=subplot_kw)
+    for r, (fam, ks) in enumerate(rows):
+        for c in range(n_col):
+            if c < len(ks):
+                panel(ks[c], axes[r, c])
+            else:
+                axes[r, c].set_visible(False)
+    fig.tight_layout()
+    if spacing:
+        fig.subplots_adjust(**spacing)
+    return fig
 
 
-def square_limits(problem, pad: float = 0.15):
-    """Square window (equal axes) around the initial points and the Pareto set of a 2-D problem."""
-    pts = np.concatenate([np.asarray(problem.inits, dtype=float), problem.pareto_set(200)])
-    lo, hi = pts.min(axis=0), pts.max(axis=0)
-    c, h = (lo + hi) / 2, (hi - lo).max() / 2 * (1 + pad)
-    return (c[0] - h, c[0] + h), (c[1] - h, c[1] + h)
-
-
-def problem_figures(problem, logs: Path, fig_dir: Path, seed: int = 1) -> None:
-    """Figures of a quadratic problem of :mod:`problems` (``logs/<problem>/<method>/``): per method, the runs
-    (``seed``) on the contour map of the average loss (``contour/<method>.pdf``, 2-D problems) and in the loss plane
-    (``loss/<method>.pdf``, two objectives); per family, the distance of the search mean to the Pareto set against the
-    iteration (``convergence_<family>.pdf``)."""
-    keys = [k for fam in FAMILIES.values() for k in fam if (logs / k / "trajectories.npz").exists()]
-    names = {k: json.loads((logs / k / "summary.json").read_text())["name"] for k in keys}
-    dist = {}
+def problem_figures(name: str, logs: Path, keys: list, fig_dir: Path, seed: int = 1, suffix: str = "") -> None:
+    """Figures of a quadratic problem of :mod:`problems` comparing the methods ``keys`` of a results folder
+    (``results/<problem>/<evo|grad>/<method>/``), saved in ``fig_dir``: ``search_plot.pdf``, the runs
+    (``seed``) on the contour map of the average loss (2-D problems), and ``value_plot.pdf``, the same runs in the loss
+    plane (two objectives), each one figure with a subplot per method (a row per family); per family, the distance of
+    the search mean to the Pareto set against the iteration (``ps_dist_convergence_plot_<family>.pdf``)."""
+    problem = PROBLEMS[name]
+    summaries = {k: json.loads((logs / k / "summary.json").read_text()) for k in keys}
+    names = {k: summaries[k]["name"] for k in keys}
+    data = {k: np.load(logs / k / "trajectories.npz") for k in keys}
+    by_family = {fam: [k + suffix for k in ks if k + suffix in data] for fam, ks in FAMILIES.items()}
     fig_dir.mkdir(parents=True, exist_ok=True)
-    for sub, needed in (("contour", problem.n_params == 2), ("loss", problem.n_obj == 2)):
-        if needed:
-            (fig_dir / sub).mkdir(exist_ok=True)
-    for k in keys:
-        data = np.load(logs / k / "trajectories.npz")
-        s = list(data["seeds"]).index(seed)
-        if problem.n_params == 2:
-            ax, fig = contour_panel(problem, data["x"][:, s], *square_limits(problem), levels="quantile")
-            fig.savefig(fig_dir / "contour" / f"{k}.pdf", bbox_inches="tight", dpi=300)
-            plt.close(fig)
-        if problem.n_obj == 2:
-            ax, fig = loss_panel(problem, data["losses"][:, s])
-            rasterize_dense(fig)
-            fig.savefig(fig_dir / "loss" / f"{k}.pdf", bbox_inches="tight", dpi=300)
-            plt.close(fig)
-        gens = np.unique(np.linspace(0, data["x"].shape[2] - 1, 2001).astype(int))  # at most 2001 iterations
-        dist[k] = problem.set_distance(data["x"][:, :, gens])  # [inits, seeds, len(gens)]
+
+    def run_of(k):  # [inits, T + 1, ...] of the run of ``seed``
+        return list(data[k]["seeds"]).index(seed)
+
+    if problem.n_params == 2:
+        def search(k, ax):
+            contour_panel(problem, data[k]["x"][:, run_of(k)], SEARCH_PLOT_LIMS[name], levels="quantile", ax=ax)
+            ax.set_title(names[k], size=18)
+
+        fig = method_grid(by_family, search, 5.0, 5.5)
+        fig.savefig(fig_dir / "search_plot.pdf", bbox_inches="tight", dpi=300)  # vector: the runs are thinned
+        plt.close(fig)
+    if problem.n_obj == 2:
+        def value(k, ax):
+            loss_panel(problem, data[k]["losses"][:, run_of(k)], VALUE_PLOT_LIMS[name], ax=ax)
+            ax.set_title(names[k], size=18, pad=28)
+
+        fig = method_grid(by_family, value, 6.0, 5.5, spacing=LOSS_PLANE_SPACING)
+        rasterize_dense(fig)
+        fig.savefig(fig_dir / "value_plot.pdf", bbox_inches="tight", dpi=300)
+        plt.close(fig)
+    # at most 2001 iterations per curve, each method over its own number of iterations
+    gens = {k: np.unique(np.linspace(0, data[k]["x"].shape[2] - 1, 2001).astype(int)) for k in keys}
+    dist = {k: problem.set_distance(data[k]["x"][:, :, gens[k]]) for k in keys}  # [inits, seeds, len(gens[k])]
     for fam_name, fam in FAMILIES.items():
-        present = [k for k in fam if k in dist]
-        if present:
-            ax, fig = plot_convergence(present, dist, names, ylabel="Distance to Pareto set", gens=gens)
+        shown = [k + suffix for k in fam if k + suffix in dist]
+        if shown:
+            ax, fig = plot_convergence(shown, dist, names, ylabel="Distance to Pareto set", gens=gens)
             ax.set_xlabel("Iteration", size=20)
             rasterize_dense(fig)
-            fig.savefig(fig_dir / f"convergence_{fam_name.lower()}.pdf", bbox_inches="tight", dpi=300)
+            fig.savefig(fig_dir / f"ps_dist_convergence_plot_{fam_name.lower()}.pdf", bbox_inches="tight", dpi=300)
             plt.close(fig)
-    print(f"{problem.name}: figures -> {fig_dir}")
+    print(f"{name}: figures -> {fig_dir}")
+
+
+def run_figures(run_dir: Path, seed: int = None) -> Path:
+    """Figures of one run of ``main.py`` (``run_dir``: its ``trajectories.npz``, ``summary.json``), saved in
+    ``<run_dir>/figures/``; the runs of ``seed`` (default: the first) for the trajectory figures, every seed for the
+    convergence curve. Called by ``main.py`` after each run. Limits and ticks: ``SEARCH_PLOT_LIMS`` /
+    ``VALUE_PLOT_LIMS`` of :mod:`constants`.
+
+    * every problem: ``ps_dist_convergence_plot.pdf``, the distance to the Pareto set against the iteration;
+    * 2-D problems: ``search_plot.pdf``, the runs on the contour map of the average loss (:func:`contour_panel`);
+    * two objectives: ``value_plot.pdf``, the runs in the loss plane (:func:`loss_panel`; Valley-Bowl: Nash-MTL's
+      :func:`plot_2d_pareto`);
+    * Valley-Bowl, also: ``search_plot_3d.pdf`` (:func:`plot_3d`) and ``value_plot_seed_mean.pdf`` (seed-mean
+      losses, :func:`traj_panel`)."""
+    run_dir = Path(run_dir)
+    summary = json.loads((run_dir / "summary.json").read_text())
+    data = np.load(run_dir / "trajectories.npz")
+    name, key, inits = summary["problem"], run_dir.name, summary["inits"]
+    problem = PROBLEMS[name]
+    names = {key: summary["name"]}
+    seeds = list(data["seeds"])
+    s = seeds.index(seed) if seed is not None else 0
+    X, L = data["x"].astype(np.float32), data["losses"]  # [inits, seeds, T + 1, D], [inits, seeds, T + 1, K]
+    out = run_dir / "figures"
+    out.mkdir(exist_ok=True)
+
+    def save(fig, name, rasterize=True, **kwargs):
+        if rasterize:
+            rasterize_dense(fig)
+        fig.savefig(out / name, bbox_inches="tight", dpi=300, **kwargs)
+        plt.close(fig)
+
+    gens = np.unique(np.linspace(0, X.shape[2] - 1, 2001).astype(int))  # at most 2001 iterations on the curve
+    if isinstance(problem, ValleyBowl):
+        trajectories = {i: {"traj": X[i, s, :-1]} for i in range(len(inits))}  # Nash-MTL: x before each step
+        ax, fig, legend = plot_2d_pareto(trajectories, problem, VALUE_PLOT_LIMS[name])
+        save(fig, "value_plot.pdf", bbox_extra_artists=(legend,), facecolor="white")
+        ax, fig = plot_3d(X[:, s], problem)
+        save(fig, "search_plot_3d.pdf")
+        ax, fig = contour_panel(problem, X[:, s], SEARCH_PLOT_LIMS[name])
+        save(fig, "search_plot.pdf", rasterize=False)  # vector: contour_panel thins the runs
+        fig, ax = plt.subplots(figsize=(6, 5))
+        lims = VALUE_PLOT_LIMS[name]
+        traj_panel(ax, L, problem.pareto_front(), lims["xlim"], lims["ylim"], problem.losses(problem.global_optimum()))
+        set_lims(ax, lims)
+        save(fig, "value_plot_seed_mean.pdf")
+    else:
+        if problem.n_params == 2:
+            ax, fig = contour_panel(problem, X[:, s], SEARCH_PLOT_LIMS[name], levels="quantile")
+            save(fig, "search_plot.pdf", rasterize=False)
+        if problem.n_obj == 2:
+            ax, fig = loss_panel(problem, L[:, s], VALUE_PLOT_LIMS[name])
+            save(fig, "value_plot.pdf")
+    dist = problem.set_distance(X[:, :, gens])  # [inits, seeds, len(gens)]
+    ax, fig = plot_convergence([key], {key: dist}, names, ylabel="Distance to Pareto set", gens={key: gens})
+    ax.set_xlabel("Iteration", size=20)
+    save(fig, "ps_dist_convergence_plot.pdf")
+    return out
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--logs", type=Path, default=HERE / "logs")
-    parser.add_argument("--fig-dir", type=Path, default=None,
-                        help="default: figures/scale_<scale> (Valley-Bowl problem) or figures/<problem>")
+    parser.add_argument("--results", dest="logs", type=Path, required=True,
+                        help="results folder of one problem and kind, e.g. examples/toy/results/cqf/grad")
+    parser.add_argument("--fig-dir", type=Path, default=None, help="default: <results>/figures<suffix>")
+    parser.add_argument("--suffix", default="", choices=("",) + SUFFIXES,
+                        help="plot the runs of this protocol variant (e.g. _adam) instead of the reference ones")
     parser.add_argument("--seed", type=int, default=1, help="seed of the Nash-MTL-style and 3-D figures")
     args = parser.parse_args()
+    if args.fig_dir is None:  # next to the runs (param_plots / value_plots of TorchJD)
+        args.fig_dir = args.logs / f"figures{args.suffix}"
 
-    keys = [k for fam in FAMILIES.values() for k in fam if (args.logs / k / "trajectories.npz").exists()]
+    keys = [k + args.suffix for fam in FAMILIES.values() for k in fam  # the methods with a run in the folder
+            if (args.logs / (k + args.suffix) / "trajectories.npz").exists()]
     if not keys:
-        raise SystemExit(f"No logs in {args.logs}")
-    problem_cfg = yaml.safe_load((args.logs / keys[0] / "config.yaml").read_text())["problem"]
-    if problem_cfg.get("name", "vb") != "vb":  # quadratic problems (problems.py)
-        problem = make_problem(problem_cfg["name"])
-        problem_figures(problem, args.logs, args.fig_dir or HERE / "figures" / problem.name, args.seed)
+        raise SystemExit(f"No runs in {args.logs}")
+    names_of_problem = {yaml.safe_load((args.logs / k / "config.yaml").read_text())["problem"]["name"] for k in keys}
+    if len(names_of_problem) != 1:
+        raise SystemExit(f"Runs of different problems in {args.logs}: {sorted(names_of_problem)}")
+    problem_name = names_of_problem.pop()
+    problem = PROBLEMS[problem_name]
+    if not isinstance(problem, ValleyBowl):  # quadratic problems
+        problem_figures(problem_name, args.logs, keys, args.fig_dir, args.seed, args.suffix)
         return
-    losses = {k: np.load(args.logs / k / "trajectories.npz")["losses"] for k in keys}
+    data = {k: np.load(args.logs / k / "trajectories.npz") for k in keys}
+    losses = {k: data[k]["losses"] for k in keys}
     summaries = {k: json.loads((args.logs / k / "summary.json").read_text()) for k in keys}
     names = {k: summaries[k]["name"] for k in keys}
-    scales = {yaml.safe_load((args.logs / k / "config.yaml").read_text())["problem"]["scale"] for k in keys}
-    if len(scales) != 1:
-        raise SystemExit(f"Runs with different problem.scale: {sorted(scales)}")
-    scale = scales.pop()
-    front = pareto_front(scale)
-    star = optimum_losses(scale)
+    front = problem.pareto_front()
+    star = problem.losses(problem.global_optimum())
     inits = summaries[keys[0]]["inits"]
-    if args.fig_dir is None:
-        args.fig_dir = HERE / "figures" / f"scale_{scale:g}"
     args.fig_dir.mkdir(parents=True, exist_ok=True)
 
-    (args.fig_dir / "loss_plane").mkdir(exist_ok=True)
-    for k in keys:
-        data = np.load(args.logs / k / "trajectories.npz")
-        s = list(data["seeds"]).index(args.seed)
-        # Nash-MTL records x before each of the n_iter steps: drop the point after the last one
-        trajectories = {i: {"traj": data["x"][i, s, :-1].astype(np.float64)} for i in range(len(inits))}
-        ax, fig, legend = plot_2d_pareto(trajectories, scale)
-        rasterize_dense(fig)
-        fig.savefig(args.fig_dir / "loss_plane" / f"{k}.pdf", bbox_extra_artists=(legend,), bbox_inches="tight", dpi=300,
-                    facecolor="white")
-        plt.close(fig)
+    by_family = {fam: [k + args.suffix for k in ks if k + args.suffix in data] for fam, ks in FAMILIES.items()}
 
-    (args.fig_dir / "3d").mkdir(exist_ok=True)
-    for k in keys:
-        data = np.load(args.logs / k / "trajectories.npz")
-        s = list(data["seeds"]).index(args.seed)
-        ax, fig = plot_3d(data["x"][:, s].astype(np.float64), scale)
-        rasterize_dense(fig)
-        fig.savefig(args.fig_dir / "3d" / f"{k}.pdf", bbox_inches="tight", dpi=300)
-        plt.close(fig)
+    def x_of(k):  # [inits, T + 1, 2] of the run of --seed
+        return data[k]["x"][:, list(data[k]["seeds"]).index(args.seed)].astype(np.float32)
 
-    (args.fig_dir / "contour").mkdir(exist_ok=True)
-    for k in keys:
-        data = np.load(args.logs / k / "trajectories.npz")
-        s = list(data["seeds"]).index(args.seed)
-        # vector: plot_contour thins the runs, rasterize_dense would rasterize the contour lines
-        ax, fig = plot_contour(data["x"][:, s].astype(np.float64), scale)
-        fig.savefig(args.fig_dir / "contour" / f"{k}.pdf", bbox_inches="tight", dpi=300)
-        plt.close(fig)
+    def value(k, ax):  # Nash-MTL's figure; Nash-MTL records x before each of the n_iter steps: drop the last point
+        plot_2d_pareto({i: {"traj": t[:-1]} for i, t in enumerate(x_of(k))}, problem, VALUE_PLOT_LIMS[problem_name],
+                       ax=ax)
+        ax.set_title(names[k], size=18, pad=28)
 
-    every = np.concatenate([front] + [L.mean(axis=1).reshape(-1, 2) for L in losses.values()])
-    lo, hi = every.min(axis=0), every.max(axis=0)
-    pad = 0.05 * (hi - lo)
-    xlim, ylim = (lo[0] - pad[0], hi[0] + pad[0]), (lo[1] - pad[1], hi[1] + pad[1])
-
-    for k in keys:
-        fig, ax = plt.subplots(figsize=(6, 5))
-        traj_panel(ax, k, names[k], losses[k], front, xlim, ylim, star)
-        rasterize_dense(fig)
-        fig.savefig(args.fig_dir / f"traj_{k}.pdf", bbox_inches="tight", dpi=300)
-        plt.close(fig)
-
-    n_col = max(len(fam) for fam in FAMILIES.values())
-    fig, axes = plt.subplots(len(FAMILIES), n_col, figsize=(6 * n_col, 5.5 * len(FAMILIES)), squeeze=False)
-    for r, fam in enumerate(FAMILIES.values()):
-        for c, k in enumerate(fam):
-            if k in losses:
-                traj_panel(axes[r, c], k, names[k], losses[k], front, xlim, ylim, star)
-            else:
-                axes[r, c].set_visible(False)
-    fig.savefig(args.fig_dir / "overview.png", bbox_inches="tight", dpi=120)
+    fig = method_grid(by_family, value, 6.0, 5.5, spacing=LOSS_PLANE_SPACING)
+    first = fig.axes[0]
+    legend = fig.legend(*first.get_legend_handles_labels(), loc="lower center", bbox_to_anchor=(0.5, 1.0),
+                        frameon=False, fontsize=20, ncol=2)
+    rasterize_dense(fig)
+    fig.savefig(args.fig_dir / "value_plot.pdf", bbox_extra_artists=(legend,), bbox_inches="tight", dpi=300,
+                facecolor="white")
     plt.close(fig)
 
-    dist = {k: front_distance(losses[k], front) for k in keys}  # [inits, seeds, T + 1]
+    def search_3d(k, ax):
+        plot_3d(x_of(k), problem, ax=ax)
+        ax.set_title(names[k], size=16)
+
+    fig = method_grid(by_family, search_3d, 6.0, 5.0, subplot_kw={"projection": "3d", "computed_zorder": False})
+    rasterize_dense(fig)
+    fig.savefig(args.fig_dir / "search_plot_3d.pdf", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+    def search(k, ax):
+        contour_panel(problem, x_of(k), SEARCH_PLOT_LIMS[problem_name], ax=ax)
+        ax.set_title(names[k], size=18)
+
+    fig = method_grid(by_family, search, 5.0, 5.5)
+    fig.savefig(args.fig_dir / "search_plot.pdf", bbox_inches="tight", dpi=300)  # vector: the runs are thinned
+    plt.close(fig)
+
+    lims = VALUE_PLOT_LIMS[problem_name]
+
+    def seed_mean(k, ax):
+        traj_panel(ax, losses[k], front, lims["xlim"], lims["ylim"], star)
+        set_lims(ax, lims)
+        ax.set_title(names[k], size=18, pad=28)
+
+    fig = method_grid(by_family, seed_mean, 6.0, 5.5, spacing=LOSS_PLANE_SPACING)
+    rasterize_dense(fig)
+    fig.savefig(args.fig_dir / "value_plot_seed_mean.pdf", bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+    dist = {k: problem.front_distance(losses[k]) for k in keys}  # [inits, seeds, T + 1]
     for fam_name, fam in FAMILIES.items():
-        present = [k for k in fam if k in dist]
-        if not present:
+        shown = [k + args.suffix for k in fam if k + args.suffix in dist]
+        if not shown:
             continue
-        ax, fig = plot_convergence(present, dist, names)
+        ax, fig = plot_convergence(shown, dist, names)
         rasterize_dense(fig)
-        fig.savefig(args.fig_dir / f"convergence_{fam_name.lower()}.pdf", bbox_inches="tight", dpi=300)
+        fig.savefig(args.fig_dir / f"pf_dist_convergence_plot_{fam_name.lower()}.pdf", bbox_inches="tight", dpi=300)
         plt.close(fig)
 
     # final distance per initial point: mean +- std over seeds, best (lowest mean) per column in bold
@@ -516,12 +579,12 @@ def main() -> None:
     lines = [r"\begin{tabular}{l" + "c" * (n_init + 1) + "}", r"\toprule",
              "Method & " + " & ".join(cols) + r" & Mean \\", r"\midrule"]
     for fam in FAMILIES.values():
-        present = [k for k in fam if k in final]
-        if not present:
+        shown = [k + args.suffix for k in fam if k + args.suffix in final]
+        if not shown:
             continue
-        cells = {k: [final[k][i] for i in range(n_init)] + [final[k].mean(axis=0)] for k in present}
-        best = [min(present, key=lambda k: cells[k][j].mean()) for j in range(n_init + 1)]
-        for k in present:
+        cells = {k: [final[k][i] for i in range(n_init)] + [final[k].mean(axis=0)] for k in shown}
+        best = [min(shown, key=lambda k: cells[k][j].mean()) for j in range(n_init + 1)]
+        for k in shown:
             row = []
             for j, v in enumerate(cells[k]):
                 s = f"{v.mean():.3f} $\\pm$ {v.std():.3f}"
@@ -530,7 +593,7 @@ def main() -> None:
         lines.append(r"\midrule")
     lines[-1] = r"\bottomrule"
     lines.append(r"\end{tabular}")
-    (args.logs / "summary.tex").write_text("\n".join(lines) + "\n")
+    (args.logs / f"summary{args.suffix}.tex").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
 
 

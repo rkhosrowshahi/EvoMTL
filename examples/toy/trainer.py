@@ -1,5 +1,5 @@
 """Minimal trainer adapter so the OpenES-family runners of :mod:`LibMTL.evomtl.moea` run on the toy problems
-(:mod:`problems`).
+(:mod:`problems`, :mod:`constants`).
 
 The runners only touch the trainer through a few hooks: the flat weight vector (``theta_0``, ``set_theta``), the
 per-task losses of the current weights (``evaluate_multiobjective_losses``, ``forward4loss``), mini-batch sampling and
@@ -16,23 +16,18 @@ import numpy as np
 import torch
 from torch import nn
 
-from problems import make_problem
-
-
-class ToyPoint(nn.Module):
-    def __init__(self, init: torch.Tensor):
-        super().__init__()
-        self.x = nn.Parameter(init.clone().float())
+from problems import Problem
 
 
 class ToyTrainer:
-    """Trainer interface of the ES runners for the problem ``name`` of :func:`problems.make_problem` (its settings in
-    ``problem_kwargs``, e.g. ``scale`` of ``vb``; losses shifted by ``loss_offset``; see ``runner.py``)."""
+    """Trainer interface of the ES runners for ``problem`` (one of ``PROBLEMS`` of :mod:`constants`) from ``init``,
+    losses shifted by ``loss_offset`` (see ``main.py``)."""
 
-    def __init__(self, init, name: str = "vb", loss_offset: float = 0.0, **problem_kwargs):
-        self.problem = make_problem(name, **problem_kwargs)
+    def __init__(self, init, problem: Problem, loss_offset: float = 0.0):
+        self.problem = problem
         self.loss_offset = float(loss_offset)
-        self.model = ToyPoint(torch.as_tensor(init, dtype=torch.float32))
+        self.model = nn.Module()  # the "network": the point x
+        self.model.x = nn.Parameter(torch.as_tensor(init, dtype=torch.float32).clone())
         self.theta_0 = self.model.x.detach().clone()
         self.task_num = self.problem.n_obj
         self.task_name = [f"f{k + 1}" for k in range(self.task_num)]

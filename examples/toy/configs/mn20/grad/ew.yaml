@@ -1,0 +1,19 @@
+# EW (gradient descent, LibMTL weighting EW) on MN20, the multinorm, a = (1, ..., 20), 20 objectives.
+# The protocol of configs/mn20/evo/openes.yaml (initial points, optimizer, iterations) with
+# EW on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# Learning rate 0.005 / 20 = 0.00025: LibMTL's EW steps along the sum of the losses, the reference
+# along the mean (Mean), so the steps are the reference's.
+
+name: EW
+weighting: EW
+weight_args: {}
+problem:
+  name: mn20
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 500
+  optim: sgd
+  lr: 0.00025
+  sgd_momentum: 0.0
+save_path: examples/toy/results/mn20/grad/ew/

@@ -1,0 +1,19 @@
+# MGDA (Loss Norm) (gradient descent, LibMTL weighting MGDA) on MN20, the multinorm, a = (1, ..., 20), 20 objectives.
+# The protocol of configs/mn20/evo/mo_mgda_loss_norm_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# MGDA (Loss Norm) on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# MGDA with grad_norm loss (Sener & Koltun 2018; LibMTL's mgda_gn): each gradient divided by its loss.
+
+name: MGDA (Loss Norm)
+weighting: MGDA
+weight_args:
+  mgda_gn: loss
+problem:
+  name: mn20
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 500
+  optim: sgd
+  lr: 0.01
+  sgd_momentum: 0.0
+save_path: examples/toy/results/mn20/grad/mgda_loss_norm/

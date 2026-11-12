@@ -26,4 +26,4 @@ es:
   direction: mgda
   grad_norm: none
   stationary_tol: 0.05
-save_path: examples/toy/logs/mn20/mo_mgda_openes/
+save_path: examples/toy/results/mn20/evo/mo_mgda_openes/

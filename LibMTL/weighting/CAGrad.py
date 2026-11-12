@@ -35,7 +35,8 @@ class CAGrad(AbsWeighting):
             grads = self._compute_grad(losses, mode='backward')
         
         GG = torch.matmul(grads, grads.t()).cpu() # [num_tasks, num_tasks]
-        g0_norm = (GG.mean()+1e-8).sqrt() # norm of the average gradient
+        # norm of the average gradient (clamped: at a Pareto-stationary point rounding can make GG.mean() < 0)
+        g0_norm = (GG.mean().clamp_min(0)+1e-8).sqrt()
 
         x_start = np.ones(self.task_num) / self.task_num
         bnds = tuple((0,1) for x in x_start)
@@ -44,7 +45,7 @@ class CAGrad(AbsWeighting):
         b = x_start.copy()
         c = (calpha*g0_norm+1e-8).item()
         def objfn(x):
-            return (x.reshape(1,-1).dot(A).dot(b.reshape(-1,1))+c*np.sqrt(x.reshape(1,-1).dot(A).dot(x.reshape(-1,1))+1e-8)).sum()
+            return (x.reshape(1,-1).dot(A).dot(b.reshape(-1,1))+c*np.sqrt(np.maximum(x.reshape(1,-1).dot(A).dot(x.reshape(-1,1)), 0)+1e-8)).sum()
         res = minimize(objfn, x_start, bounds=bnds, constraints=cons)
         w_cpu = res.x
         ww = torch.Tensor(w_cpu).to(self.device)

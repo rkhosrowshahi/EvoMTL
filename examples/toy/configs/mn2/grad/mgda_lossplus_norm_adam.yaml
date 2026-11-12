@@ -1,0 +1,20 @@
+# MGDA (Loss+ Norm) (gradient descent, LibMTL weighting MGDA) on MN2, the multinorm, a = (1, 10).
+# The protocol of configs/mn2/evo/mo_mgda_lossplus_norm_openes_adam.yaml (initial points, optimizer, learning rate, iterations) with
+# MGDA (Loss+ Norm) on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# MGDA with grad_norm loss+ (Sener & Koltun 2018; LibMTL's mgda_gn): each gradient divided by its loss times its norm.
+
+name: MGDA (Loss+ Norm)
+weighting: MGDA
+weight_args:
+  mgda_gn: loss+
+problem:
+  name: mn2
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 35000
+  optim: adam
+  lr: 0.001
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-08
+save_path: examples/toy/results/mn2/grad/mgda_lossplus_norm_adam/

@@ -1,0 +1,33 @@
+# MO-SVD-PGA-OpenES on the Valley-Bowl (VB) problem (protocol of Nash-MTL's experiments/toy): one OpenES pseudo-gradient per objective (raw fitness), combined by SVD-PGA.
+# Protocol of experiments/toy/trainer.py (five initial points, Adam lr 1e-3 on x, 35,000 iterations) without the
+# scale on the first loss, as in Fig. 1 of Aligned-MTL (Senushkin et al., CVPR 2023).
+# SVD-PGA: average of the oriented, unit-norm principal directions of the pseudo-gradients (ported from TorchJD).
+
+name: MO-SVD-PGA-OpenES
+moea: mo_svd_pga_openes
+
+# Toy problem
+problem:
+  name: vb                      # Valley-Bowl, no scale on the first loss (Aligned-MTL, CAGrad)
+  loss_offset: 21.0             # added to both losses (> 0 everywhere); changes MO-MGDA (Loss Norm) only
+
+seeds: [1, 2, 3]
+
+# Evolution strategy: keyword arguments of the runner (LibMTL.evomtl.moea.run_mo_svd_pga_openes)
+es:
+  num_iterations: 35000
+  pop_size: 16
+  sigma: 0.01
+  sigma_decay: 1.0
+  sigma_min: 0.0
+  lr: 0.001
+  optim: adam                   # optimizer on the search mean (sgd, adam or rmsprop); lr is its learning rate
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-8
+  fitness_shaping: raw          # keeps the size of each pseudo-gradient
+  antithetic: true
+  pga_rank: 2                   # at most 2 principal directions (TorchJD trajectory experiments)
+  pga_scale: none               # unit-scale direction (mean_norm: times the mean pseudo-gradient norm)
+
+# Paths (relative to the repository root)
+save_path: examples/toy/results/vb/evo/mo_svd_pga_openes/

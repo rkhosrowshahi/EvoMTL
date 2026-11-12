@@ -1,0 +1,18 @@
+# MGDA (gradient descent, LibMTL weighting MGDA) on HQF, the homogeneous quadratic form.
+# The protocol of configs/hqf/evo/mo_mgda_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# MGDA on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+
+name: MGDA
+weighting: MGDA
+weight_args:
+  mgda_gn: none
+problem:
+  name: hqf
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 100
+  optim: sgd
+  lr: 0.01
+  sgd_momentum: 0.0
+save_path: examples/toy/results/hqf/grad/mgda/

@@ -1,0 +1,19 @@
+# Aligned-MTL (gradient descent, LibMTL weighting Aligned_MTL) on MN20, the multinorm, a = (1, ..., 20), 20 objectives.
+# The protocol of configs/mn20/evo/mo_aligned_mtl_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# Aligned-MTL on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# Learning rate 0.02 / 20 = 0.001: LibMTL's Aligned_MTL steps along B 1, the reference
+# along B 1 / K, so the steps are the reference's.
+
+name: Aligned-MTL
+weighting: Aligned_MTL
+weight_args: {}
+problem:
+  name: mn20
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 500
+  optim: sgd
+  lr: 0.001
+  sgd_momentum: 0.0
+save_path: examples/toy/results/mn20/grad/aligned_mtl/

@@ -71,7 +71,7 @@ def camgda_aggregate(J: torch.Tensor, kappa: np.ndarray, drop_radius: float) -> 
     if dropped.all():
         dropped[:] = False
     active = np.flatnonzero(~dropped)
-    M = (J[active] @ J[active].T).double().numpy()
+    M = (J[active] @ J[active].T).numpy()
     alpha = np.zeros(J.shape[0])
     alpha[active] = min_norm_simplex(M)
     w = torch.as_tensor(alpha, dtype=J.dtype)
@@ -107,7 +107,7 @@ class CAMGDAJacobian:
     def true_direction(self, J_true: torch.Tensor) -> torch.Tensor:
         active = np.flatnonzero(~self.dropped) if self.dropped is not None else np.arange(J_true.shape[0])
         alpha = np.zeros(J_true.shape[0])
-        alpha[active] = min_norm_simplex((J_true[active] @ J_true[active].T).double().numpy())
+        alpha[active] = min_norm_simplex((J_true[active] @ J_true[active].T).numpy())
         return torch.as_tensor(alpha, dtype=J_true.dtype) @ J_true
 
 

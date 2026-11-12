@@ -47,7 +47,7 @@ def cagrad_aggregate(J: torch.Tensor, calpha: float = 0.5, rescale: int = 1) -> 
     """CAGrad (Liu et al. 2021) on Jacobian rows ``J`` (``[K, D]``); return ``(d, w)`` with ``d = J^T w`` (see
     module docstring)."""
     K = J.shape[0]
-    GG = (J @ J.T).double().numpy()
+    GG = (J @ J.T).numpy()
     A = GG / max(float(GG.diagonal().max()), 1e-30)  # scale-free dual (see module docstring)
     b = np.full(K, 1.0 / K)
     c = calpha * np.sqrt(max(float(A.mean()), 0.0) + 1e-8)  # c ||g_0||, ||g_0||^2 = mean of the Gramian

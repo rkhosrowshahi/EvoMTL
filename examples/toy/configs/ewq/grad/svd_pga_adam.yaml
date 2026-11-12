@@ -1,0 +1,21 @@
+# SVD-PGA (gradient descent, LibMTL weighting SVD_PGA) on EWQ, the element-wise quadratic.
+# The protocol of configs/ewq/evo/mo_svd_pga_openes_adam.yaml (initial points, optimizer, learning rate, iterations) with
+# SVD-PGA on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# SVD-PGA: average of the oriented, unit-norm principal directions of the gradients (TorchJD; rank 2, as its trajectory experiments).
+
+name: SVD-PGA
+weighting: SVD_PGA
+weight_args:
+  PGA_rank: 2
+  PGA_scale: none
+problem:
+  name: ewq
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 35000
+  optim: adam
+  lr: 0.001
+  adam_betas: [0.9, 0.999]
+  adam_eps: 1.0e-08
+save_path: examples/toy/results/ewq/grad/svd_pga_adam/

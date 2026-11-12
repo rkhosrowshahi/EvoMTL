@@ -1,0 +1,19 @@
+# MGDA (Loss+ Norm) (gradient descent, LibMTL weighting MGDA) on HQF, the homogeneous quadratic form.
+# The protocol of configs/hqf/evo/mo_mgda_lossplus_norm_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# MGDA (Loss+ Norm) on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+# MGDA with grad_norm loss+ (Sener & Koltun 2018; LibMTL's mgda_gn): each gradient divided by its loss times its norm.
+
+name: MGDA (Loss+ Norm)
+weighting: MGDA
+weight_args:
+  mgda_gn: loss+
+problem:
+  name: hqf
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 100
+  optim: sgd
+  lr: 0.01
+  sgd_momentum: 0.0
+save_path: examples/toy/results/hqf/grad/mgda_lossplus_norm/

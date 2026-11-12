@@ -1,0 +1,19 @@
+# CAGrad (gradient descent, LibMTL weighting CAGrad) on CQF, the convex quadratic form (Eq. 14 of the UPGrad paper).
+# The protocol of configs/cqf/evo/mo_cagrad_openes.yaml (initial points, optimizer, learning rate, iterations) with
+# CAGrad on the exact Jacobian instead of the ES estimate; deterministic, so one seed.
+
+name: CAGrad
+weighting: CAGrad
+weight_args:
+  calpha: 0.5
+  rescale: 1
+problem:
+  name: cqf
+  loss_offset: 0.0
+seeds: [1]
+grad:
+  num_iterations: 200
+  optim: sgd
+  lr: 0.125
+  sgd_momentum: 0.0
+save_path: examples/toy/results/cqf/grad/cagrad/
