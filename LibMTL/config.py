@@ -158,7 +158,8 @@ _parser.add_argument(
          'mo_cagrad_guidedes (the same with Guided ES sampling), mo_mgda2_openes (MGDA after dropping the negligible '
          'pseudo-gradients; also uses --evo_mgda2_drop_eps), mo_mgda2_guidedes (the same with Guided ES sampling), '
          'mo_camgda_openes (curvature-aware MGDA: drops the objectives curved upward and near their minimum; also '
-         'uses --evo_camgda_*), mo_camgda_guidedes (the same with Guided ES sampling); '
+         'uses --evo_camgda_*), mo_camgda_guidedes (the same with Guided ES sampling), mo_os_nmf_pga_openes '
+         '(per-objective OpenES pseudo-gradients aggregated by OS-NMF-PGA; also uses --PGA_rank, --PGA_scale); '
          'or psl_es '
          '(Pareto set learning with OpenES: one run learns preference-conditioned networks; uses the --evo_es_* '
          'and --evo_psl_* flags), or tpsl_es (Tangent PSL-ES: the same family with the steering direction computed '
@@ -731,7 +732,8 @@ def _evo_floats_or_none(seq) -> Optional[np.ndarray]:
 # evo_moea keys of the single-network evolution strategies (LibMTL.evomtl.evo_trainer.ES_RUNNERS)
 ES_MOEAS = ('openes', 'guidedes', 'snes', 'pgpe', 'mo_upgrad_openes', 'mo_upgrad_guidedes', 'mo_mean_openes',
             'mo_mean_guidedes', 'mo_mgda_openes', 'mo_mgda_guidedes', 'mo_mgda_openes_libmtl', 'mo_cagrad_openes',
-            'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes', 'mo_camgda_openes', 'mo_camgda_guidedes')
+            'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes', 'mo_camgda_openes', 'mo_camgda_guidedes',
+            'mo_gradnorm_openes', 'mo_os_nmf_pga_openes')
 
 
 def _make_evo_args(params):
@@ -851,7 +853,7 @@ def _make_evo_args(params):
         }
         if es in ('openes', 'guidedes', 'mo_upgrad_openes', 'mo_upgrad_guidedes', 'mo_mean_openes', 'mo_mean_guidedes',
                   'mo_cagrad_openes', 'mo_cagrad_guidedes', 'mo_mgda2_openes', 'mo_mgda2_guidedes', 'mo_camgda_openes',
-                  'mo_camgda_guidedes'):
+                  'mo_camgda_guidedes', 'mo_gradnorm_openes', 'mo_os_nmf_pga_openes'):
             evo_kwargs['sigma_schedule'] = str(params.evo_es_sigma_schedule).strip().lower()
         if es in ('snes', 'pgpe'):  # per-parameter step sizes
             evo_kwargs['sigma_lr'] = float(params.evo_es_sigma_lr)
@@ -862,6 +864,10 @@ def _make_evo_args(params):
                 'upgrad_norm_eps': float(params.upgrad_norm_eps),
                 'upgrad_reg_eps': float(params.upgrad_reg_eps),
             })
+        if es.startswith('mo_gradnorm'):
+            evo_kwargs['gradnorm_alpha'] = float(params.alpha)  # --alpha, as LibMTL's GradNorm
+        if es.startswith('mo_os_nmf_pga'):  # --PGA_rank / --PGA_scale, as LibMTL's OS_NMF_PGA
+            evo_kwargs.update({'pga_rank': params.PGA_rank, 'pga_scale': str(params.PGA_scale)})
         if es.startswith('mo_cagrad'):
             evo_kwargs.update({
                 'cagrad_alpha': float(params.calpha),

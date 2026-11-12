@@ -132,15 +132,15 @@ VALUE_PLOT_LIMS = {
 FAMILIES = {
     "OpenES": ["openes", "mo_upgrad_openes", "mo_cagrad_openes", "mo_mgda_openes",
                "mo_mgda_l2_norm_openes", "mo_mgda_loss_norm_openes", "mo_mgda_lossplus_norm_openes",
-               "mo_aligned_mtl_openes", "mo_svd_pga_openes", "mo_os_nmf_pga_openes"],
+               "mo_aligned_mtl_openes", "mo_svd_pga_openes", "mo_os_nmf_pga_openes", "mo_gradnorm_openes"],
     "GuidedES": ["guidedes", "mo_upgrad_guidedes", "mo_cagrad_guidedes", "mo_mgda_guidedes",
                  "mo_mgda_l2_norm_guidedes", "mo_mgda_loss_norm_guidedes", "mo_mgda_lossplus_norm_guidedes",
                  "mo_aligned_mtl_guidedes", "mo_svd_pga_guidedes", "mo_os_nmf_pga_guidedes"],
     # gradient counterparts of the ES methods above (LibMTL weightings; same positions, so same colors)
     "Grad": ["ew", "upgrad", "cagrad", "mgda", "mgda_l2_norm", "mgda_loss_norm", "mgda_lossplus_norm",
-             "aligned_mtl", "svd_pga", "os_nmf_pga"],
+             "aligned_mtl", "svd_pga", "os_nmf_pga", "gradnorm"],
     # the other LibMTL weightings (not GradDrop)
-    "LibMTL": ["gradnorm", "uw", "dwa", "gls", "pcgrad", "gradvac", "imtl", "nash_mtl", "rlw", "moco", "db_mtl",
+    "LibMTL": ["uw", "dwa", "gls", "pcgrad", "gradvac", "imtl", "nash_mtl", "rlw", "moco", "db_mtl",
                "stch", "excessmtl", "fairgrad", "famo", "modo", "sdmgrad", "dualproj"],
 }
 SUFFIXES = ("_adam",)  # protocol variants of a method, in the same results folder

@@ -61,6 +61,7 @@ from .moea.mo_cagrad_guidedes import run_mo_cagrad_guidedes
 from .moea.mo_cagrad_openes import run_mo_cagrad_openes
 from .moea.mo_camgda_guidedes import run_mo_camgda_guidedes
 from .moea.mo_camgda_openes import run_mo_camgda_openes
+from .moea.mo_gradnorm_openes import run_mo_gradnorm_openes
 from .moea.mo_mean_openes import run_mo_mean_openes
 from .moea.mo_mgda2_guidedes import run_mo_mgda2_guidedes
 from .moea.mo_mgda2_openes import run_mo_mgda2_openes
@@ -99,6 +100,7 @@ ES_RUNNERS = {
     "mo_os_nmf_pga_openes": run_mo_os_nmf_pga_openes,
     "mo_os_nmf_pga_guidedes": run_mo_os_nmf_pga_guidedes,
     "mo_mean_openes": run_mo_mean_openes,
+    "mo_gradnorm_openes": run_mo_gradnorm_openes,
     "mo_mean_guidedes": run_mo_mean_guidedes,
     "mo_mgda_openes": run_mo_mgda_openes,
     "mo_mgda_guidedes": run_mo_mgda_guidedes,

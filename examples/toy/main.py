@@ -28,7 +28,8 @@ figures of the run, :func:`utils.run_figures`; ``utils.py`` compares the methods
 
 ``problem.loss_offset`` (21 in the Valley-Bowl configs: both losses positive everywhere; f2 >= -20, f1 >= -2 with
 scale 0.1) is a constant added to both losses. It changes no method except MO-MGDA(LN), which divides each
-pseudo-gradient by its loss and needs positive losses (the Pareto front of this problem is entirely negative).
+pseudo-gradient by its loss, and (MO-)GradNorm, whose training rates are ratios of the losses; both need positive
+losses (the Pareto front of this problem is entirely negative).
 Trajectories and reported losses are in the original, unshifted units.
 
 Usage (from the repository root; flags override the YAML)::

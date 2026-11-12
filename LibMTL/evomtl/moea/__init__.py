@@ -20,6 +20,7 @@ from .mo_cagrad_guidedes import run_mo_cagrad_guidedes
 from .mo_camgda_guidedes import run_mo_camgda_guidedes
 from .mo_camgda_openes import run_mo_camgda_openes
 from .mo_cagrad_openes import run_mo_cagrad_openes
+from .mo_gradnorm_openes import run_mo_gradnorm_openes
 from .mo_mean_guidedes import run_mo_mean_guidedes
 from .mo_mean_openes import run_mo_mean_openes
 from .mo_mgda2_guidedes import run_mo_mgda2_guidedes
@@ -62,6 +63,7 @@ __all__ = [
     "run_mo_cagrad_openes",
     "run_mo_camgda_guidedes",
     "run_mo_camgda_openes",
+    "run_mo_gradnorm_openes",
     "run_mo_mean_guidedes",
     "run_mo_mean_openes",
     "run_mo_mgda2_guidedes",
