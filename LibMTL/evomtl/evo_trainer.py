@@ -47,6 +47,10 @@ import wandb
 from ..trainer import Trainer
 from .moea.common import epoch_fraction_eval_steps
 from .moea.comocma import run_comocma
+from .moea.dust import run_dust
+from .moea.mo_mgda_dust import run_mo_mgda_dust
+from .moea.mo_sum_dust import run_mo_sum_dust
+from .moea.mo_upgrad_dust import run_mo_upgrad_dust
 from .moea.hv import (
     marginal_hypervolume_weights,
     pareto_center_from_weights,
@@ -85,7 +89,7 @@ from .moea.psl_taskguide import run_psl_taskguide
 from .moea.nsga2 import run_nsga2
 from .moea.sc_de import run_sc_de
 
-# Single-network evolution strategies, by evo_moea key (hyphens are accepted for underscores)
+# Single-network evolution strategies and DUST, by evo_moea key (hyphens are accepted for underscores)
 ES_RUNNERS = {
     "openes": run_openes,
     "guidedes": run_guidedes,
@@ -111,6 +115,10 @@ ES_RUNNERS = {
     "mo_mgda2_guidedes": run_mo_mgda2_guidedes,
     "mo_camgda_openes": run_mo_camgda_openes,
     "mo_camgda_guidedes": run_mo_camgda_guidedes,
+    "dust": run_dust,
+    "mo_sum_dust": run_mo_sum_dust,
+    "mo_upgrad_dust": run_mo_upgrad_dust,
+    "mo_mgda_dust": run_mo_mgda_dust,
 }
 PSL_ES_KEYS = ("psl_es", "psl-es")
 TPSL_ES_KEYS = ("tpsl_es", "tpsl-es")

@@ -170,7 +170,12 @@ _parser.add_argument(
          'preference map, Guided ES in the span of the per-task estimates and the update; two tasks; also uses '
          '--evo_psl_map_*, --evo_psl_steering_ema and --evo_psl_curvature_*), or sc_de (SC-DE: single-centre DE, the '
          'centre moved along fitness-oriented donor differences by --evo_es_optim at --evo_es_lr; uses '
-         '--evo_es_sigma and --evo_scde_*)',
+         '--evo_es_sigma and --evo_scde_*), or dust (DUST: forward-only gradient estimates from jittering every '
+         'layer output per sample, on the sum of losses; --evo_pop_size draws per generation, --evo_es_sigma the '
+         'jitter std in activation units, the --evo_es_* optimizer flags and --evo_dust_*), or mo_sum_dust '
+         '(MO-Sum-DUST: one DUST estimate per task loss, summed; same flags), mo_upgrad_dust (MO-UPGrad-DUST: the '
+         'per-task estimates combined by UPGrad; also --upgrad_*) or mo_mgda_dust (MO-MGDA-DUST: combined by '
+         'LibMTL MGDA; --evo_mgda_grad_norm none / loss / l2 / loss+ normalizes them first)',
 )
 _parser.add_argument('--evo_iterations', type=int, default=30,
                     help='MOEA outer iterations: NSGA-II / MOPSO-CD generations or COMO-CMA-ES iterations')
@@ -327,6 +332,17 @@ _parser.add_argument('--evo_es_rmsprop_eps', type=float, default=1e-8, help='ES 
 _parser.add_argument('--evo_es_guided_k', type=int, default=0,
                     help='Guided ES (guidedes, mo_*_guidedes; 0 = off for psl_es / dcpsl_es): number of past ES '
                          'directions spanning the guiding subspace')
+_parser.add_argument('--evo_dust_chunk', type=int, default=8,
+                    help='DUST (evo_moea=dust): draws per forward pass (the batch repeated); the per-sample rewards '
+                         'are centered over them')
+_parser.add_argument('--evo_dust_allocation', type=str, default='equal', choices=('equal', 'width'),
+                    help='DUST: split of the --evo_pop_size draws over the layers: equally (equal) or in proportion '
+                         'to their output size per sample (width); at least one chunk each')
+_parser.add_argument('--evo_dust_es_draws', type=int, default=8,
+                    help='DUST: antithetic pairs of the weight-space ES on the parameters outside the Linear / '
+                         'convolution / embedding layers (normalization affines, free scalars)')
+_parser.add_argument('--evo_dust_es_sigma', type=float, default=0.03,
+                    help='DUST: perturbation std of that weight-space ES')
 _parser.add_argument('--evo_scde_pairs', type=int, default=1,
                     help='SC-DE (evo_moea=sc_de): donor pairs per generation (2 * pairs + 2 evaluations); the proposal uses 1')
 _parser.add_argument('--evo_scde_F', type=float, default=0.5, help='SC-DE: differential scaling factor F')
@@ -383,9 +399,9 @@ _parser.add_argument('--evo_mgda_gramian', type=str, default='raw', choices=('ra
 _parser.add_argument('--evo_mgda_gramian_ema', type=float, default=0.0,
                     help='MO-MGDA-OpenES (mgda): decay of a moving average of the Gramian across generations; 0 = off')
 _parser.add_argument('--evo_mgda_grad_norm', type=str, default='none', choices=('none', 'loss', 'l2', 'loss+', 'loss2'),
-                    help='MO-MGDA-OpenES: divide each pseudo-gradient by its loss (loss), norm (l2) or both (loss+) before the '
+                    help='MO-MGDA-OpenES / MO-MGDA-DUST: divide each pseudo-gradient by its loss (loss), norm (l2) or both (loss+) before the '
                          'direction is computed, as LibMTL MGDA mgda_gn; none = raw; loss2 (LN2) = loss with the '
-                         'step weights normalized to sum to one')
+                         'step weights normalized to sum to one (MO-MGDA-OpenES only)')
 _parser.add_argument('--evo_mgda_kappa', type=float, default=1.0,
                     help='MO-MGDA-OpenES (robust): conservativeness kappa, weight of the pseudo-gradient uncertainty')
 _parser.add_argument('--evo_mgda_lambda', type=float, default=1.0,
@@ -898,6 +914,32 @@ def _make_evo_args(params):
                 'guided_sigma': float(params.evo_es_guided_sigma),
                 'guided_ema': float(params.evo_es_guided_ema),
             })
+    elif moea in ('dust', 'mo_sum_dust', 'mo_upgrad_dust', 'mo_mgda_dust'):  # DUST: summed loss; MO-*-DUST: per task
+        evo_kwargs = {
+            'num_iterations': params.evo_iterations,
+            'pop_size': params.evo_pop_size,
+            'num_batches': params.evo_num_batches,
+            'seed': params.evo_seed,
+            'evo_eval_freq': evo_eval_freq,
+            'lr': float(params.evo_es_lr),
+            'sigma': float(params.evo_es_sigma),
+            'chunk': int(params.evo_dust_chunk),
+            'allocation': str(params.evo_dust_allocation).strip().lower(),
+            'es_draws': int(params.evo_dust_es_draws),
+            'es_sigma': float(params.evo_dust_es_sigma),
+            'grad_cos_freq': int(params.evo_es_grad_cos_freq),
+            'optim': str(params.evo_es_optim),
+            'adam_betas': (float(params.evo_es_adam_beta1), float(params.evo_es_adam_beta2)),
+            'adam_eps': float(params.evo_es_adam_eps),
+            'rmsprop_alpha': float(params.evo_es_rmsprop_alpha),
+            'rmsprop_eps': float(params.evo_es_rmsprop_eps),
+            'sgd_momentum': float(params.evo_es_sgd_momentum),
+        }
+        if moea == 'mo_upgrad_dust':
+            evo_kwargs.update({'upgrad_norm_eps': float(params.upgrad_norm_eps),
+                               'upgrad_reg_eps': float(params.upgrad_reg_eps)})
+        if moea == 'mo_mgda_dust':  # --evo_mgda_grad_norm, as LibMTL's MGDA mgda_gn
+            evo_kwargs['grad_norm'] = str(params.evo_mgda_grad_norm).strip().lower()
     elif moea in ('sc_de', 'sc-de'):  # SC-DE: single-centre DE on the sum of losses
         evo_kwargs = {
             'num_iterations': params.evo_iterations,

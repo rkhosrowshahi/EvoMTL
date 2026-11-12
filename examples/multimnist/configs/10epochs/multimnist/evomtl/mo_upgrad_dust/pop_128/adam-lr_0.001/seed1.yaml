@@ -1,0 +1,57 @@
+# 10-epoch protocol (PaMaL's budget): 2344 generations x 256 images = 10 epochs.
+# MO-UPGrad-DUST: forward-only training without backpropagation. As DUST, each generation jitters the output of
+# one layer at every image, but rewards each image's jitter with its reduction of every task loss separately:
+# one estimated weight gradient per task, combined by UPGrad (each projected onto the dual cone of the two and
+# averaged, so the update conflicts with neither task). Same settings as DUST (dust/pop_128/adam-lr_0.001/seed1.yaml)
+# apart from the aggregation.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Model (shared LeNet encoder, one head per task)
+weighting: EW                  # gradient-descent loss weighting; unused here (epochs: 0)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0                      # no gradient-descent phase: training is forward-only
+
+# MO-UPGrad-DUST; evo_moea selects the algorithm
+evo_training: true
+evo_schedule: evolution        # evolutionary training only, no gradient descent
+evo_moea: mo_upgrad_dust
+evo_iterations: 2344        # 10 epochs: 2,344 generations x 256 images
+evo_pop_size: 128             # direct draws (forward passes of the batch) per generation
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 1
+evo_es_lr: 0.001
+evo_es_optim: adam            # optimizer on the weights (sgd, adam or rmsprop); evo_es_lr is its learning rate
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.05            # jitter std on the layer outputs (activation units)
+evo_dust_chunk: 8             # draws per forward pass; rewards centered over them
+evo_dust_allocation: equal    # same draws per layer (width: in proportion to its output size per image)
+upgrad_norm_eps: 0.0001       # UPGrad: epsilon of the Gramian normalization
+upgrad_reg_eps: 0.0001        # UPGrad: diagonal regularization of the Gramian
+evo_es_grad_cos_freq: 1       # log cosine(per-task estimates / direction, backprop counterparts); 0 = off
+
+# Paths
+save_path: logs/multimnist/10epochs/mo_upgrad_dust/pop_128/adam-lr_1e-3/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_enable: true
+wandb_project: evomtl-multimnist
+wandb_name: mo_upgrad_dust-10epochs-pop_128-adam-lr_0.001-seed1
+wandb_group: mo_upgrad_dust-10epochs-pop_128-adam-lr_0.001

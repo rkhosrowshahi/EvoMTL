@@ -7,6 +7,7 @@ from .pga import os_nmf_pga_aggregate, svd_pga_aggregate
 from .mo_aligned_mtl_guidedes import run_mo_aligned_mtl_guidedes
 from .mo_aligned_mtl_openes import aligned_mtl_aggregate, run_mo_aligned_mtl_openes
 from .dcpsl_es import run_dcpsl_es
+from .dust import run_dust
 from .guidedes import run_guidedes
 from .hv import (
     marginal_hypervolume_weights,
@@ -29,6 +30,9 @@ from .mo_mgda_guidedes import run_mo_mgda_guidedes
 from .mo_mgda_openes import run_mo_mgda_openes
 from .mo_mgda_openes_libmtl import run_mo_mgda_openes_libmtl
 from .mo_upgrad_guidedes import run_mo_upgrad_guidedes
+from .mo_mgda_dust import run_mo_mgda_dust
+from .mo_sum_dust import run_mo_sum_dust
+from .mo_upgrad_dust import run_mo_upgrad_dust
 from .mo_upgrad_openes import run_mo_upgrad_openes
 from .mopso import run_mopso
 from .nsga2 import run_nsga2
@@ -58,6 +62,7 @@ __all__ = [
     "run_mo_aligned_mtl_guidedes",
     "run_mo_aligned_mtl_openes",
     "run_dcpsl_es",
+    "run_dust",
     "run_guidedes",
     "run_mo_cagrad_guidedes",
     "run_mo_cagrad_openes",
@@ -72,6 +77,9 @@ __all__ = [
     "run_mo_mgda_openes",
     "run_mo_mgda_openes_libmtl",
     "run_mo_upgrad_guidedes",
+    "run_mo_mgda_dust",
+    "run_mo_sum_dust",
+    "run_mo_upgrad_dust",
     "run_mo_upgrad_openes",
     "run_mopso",
     "run_nsga2",
