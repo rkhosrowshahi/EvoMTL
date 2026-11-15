@@ -1,0 +1,55 @@
+# 10-epoch protocol (PaMaL's budget): 2344 generations x 256 images = 10 epochs.
+# A-DUST: DUST (dust/pop_128/adam-lr_0.001/seed1.yaml) with antithetic jitter pairs. Each layer output is
+# jittered twice with one noise draw, y + sigma * a and y - sigma * a, on the same image; the pair is rewarded
+# by half its loss difference (l- - l+) / 2 at that image, without centering, and the error estimate averages
+# over the pairs. 128 forward evaluations per generation as DUST (64 pairs), split equally over the five
+# layers; each forward pass of the batch repeated 8 times holds 4 pairs. Otherwise as DUST.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Model (shared LeNet encoder, one head per task)
+weighting: EW                  # gradient-descent loss weighting; unused here (epochs: 0)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0                      # no gradient-descent phase: training is forward-only
+
+# A-DUST; evo_moea selects the algorithm
+evo_training: true
+evo_schedule: evolution        # evolutionary training only, no gradient descent
+evo_moea: a_dust
+evo_iterations: 2344        # 10 epochs: 2,344 generations x 256 images
+evo_pop_size: 128             # forward evaluations of the batch per generation (64 antithetic pairs)
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 1
+evo_es_lr: 0.001
+evo_es_optim: adam            # optimizer on the weights (sgd, adam or rmsprop); evo_es_lr is its learning rate
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.05            # jitter std on the layer outputs (activation units)
+evo_dust_chunk: 8             # evaluations per forward pass (even): 4 antithetic pairs
+evo_dust_allocation: equal    # same evaluations per layer (width: in proportion to its output size per image)
+evo_es_grad_cos_freq: 1       # log cosine(A-DUST estimate, backprop gradient); 0 = off
+
+# Paths
+save_path: logs/multimnist/10epochs/a_dust/pop_128/adam-lr_1e-3/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_enable: true
+wandb_project: evomtl-multimnist
+wandb_name: a_dust-10epochs-pop_128-adam-lr_0.001-seed1
+wandb_group: a_dust-10epochs-pop_128-adam-lr_0.001

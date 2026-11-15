@@ -172,7 +172,11 @@ _parser.add_argument(
          'centre moved along fitness-oriented donor differences by --evo_es_optim at --evo_es_lr; uses '
          '--evo_es_sigma and --evo_scde_*), or dust (DUST: forward-only gradient estimates from jittering every '
          'layer output per sample, on the sum of losses; --evo_pop_size draws per generation, --evo_es_sigma the '
-         'jitter std in activation units, the --evo_es_* optimizer flags and --evo_dust_*), or mo_sum_dust '
+         'jitter std in activation units, the --evo_es_* optimizer flags and --evo_dust_*), or a_dust (A-DUST: '
+         'DUST with antithetic jitter pairs +-sigma a on the same images, each rewarded by half its loss '
+         'difference, no centering; same flags, an even --evo_dust_chunk, --evo_pop_size still counts '
+         'evaluations), or cadust (CADUST: DUST with a learned low-rank activation covariance; --evo_cadust_*), '
+         'or mo_sum_dust '
          '(MO-Sum-DUST: one DUST estimate per task loss, summed; same flags), mo_upgrad_dust (MO-UPGrad-DUST: the '
          'per-task estimates combined by UPGrad; also --upgrad_*) or mo_mgda_dust (MO-MGDA-DUST: combined by '
          'LibMTL MGDA; --evo_mgda_grad_norm none / loss / l2 / loss+ normalizes them first)',
@@ -334,15 +338,30 @@ _parser.add_argument('--evo_es_guided_k', type=int, default=0,
                          'directions spanning the guiding subspace')
 _parser.add_argument('--evo_dust_chunk', type=int, default=8,
                     help='DUST (evo_moea=dust): draws per forward pass (the batch repeated); the per-sample rewards '
-                         'are centered over them')
-_parser.add_argument('--evo_dust_allocation', type=str, default='equal', choices=('equal', 'width'),
+                         'are centered over them. A-DUST (evo_moea=a_dust): even, chunk / 2 antithetic pairs per '
+                         'forward pass, no centering')
+_parser.add_argument('--evo_dust_allocation', type=str, default='equal', choices=('equal', 'width', 'log', 'custom'),
                     help='DUST: split of the --evo_pop_size draws over the layers: equally (equal) or in proportion '
-                         'to their output size per sample (width); at least one chunk each')
+                         'to their output size per sample (width), at least one chunk each; or log: each layer gets '
+                         'the CMA-ES population 4 + floor(3 ln d) of its output size d per sample, times '
+                         '--evo_dust_draw_scale, rounded up to whole chunks (--evo_pop_size unused); or custom: '
+                         'the counts of --evo_dust_draws')
+_parser.add_argument('--evo_dust_draws', type=int, nargs='*', default=None,
+                    help='DUST with --evo_dust_allocation custom: draws per layer (multiples of --evo_dust_chunk), in '
+                         'the order the forward pass calls the Linear / convolution / embedding layers')
+_parser.add_argument('--evo_dust_draw_scale', type=float, default=1.0,
+                    help='DUST with --evo_dust_allocation log: multiplier of the per-layer draw counts')
 _parser.add_argument('--evo_dust_es_draws', type=int, default=8,
                     help='DUST: antithetic pairs of the weight-space ES on the parameters outside the Linear / '
                          'convolution / embedding layers (normalization affines, free scalars)')
 _parser.add_argument('--evo_dust_es_sigma', type=float, default=0.03,
                     help='DUST: perturbation std of that weight-space ES')
+_parser.add_argument('--evo_cadust_rank', type=int, default=8,
+                    help='CADUST: maximum number of learned directions per layer (0 = isotropic DUST)')
+_parser.add_argument('--evo_cadust_decay', type=float, default=0.9,
+                    help='CADUST: discount for the previous curvature estimate, in [0, 1)')
+_parser.add_argument('--evo_cadust_subspace_fraction', type=float, default=0.5,
+                    help='CADUST: fraction of the jitter variance assigned to learned directions, in [0, 1)')
 _parser.add_argument('--evo_scde_pairs', type=int, default=1,
                     help='SC-DE (evo_moea=sc_de): donor pairs per generation (2 * pairs + 2 evaluations); the proposal uses 1')
 _parser.add_argument('--evo_scde_F', type=float, default=0.5, help='SC-DE: differential scaling factor F')
@@ -914,7 +933,7 @@ def _make_evo_args(params):
                 'guided_sigma': float(params.evo_es_guided_sigma),
                 'guided_ema': float(params.evo_es_guided_ema),
             })
-    elif moea in ('dust', 'mo_sum_dust', 'mo_upgrad_dust', 'mo_mgda_dust'):  # DUST: summed loss; MO-*-DUST: per task
+    elif moea in ('dust', 'a_dust', 'cadust', 'mo_sum_dust', 'mo_upgrad_dust', 'mo_mgda_dust'):
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
             'pop_size': params.evo_pop_size,
@@ -925,6 +944,8 @@ def _make_evo_args(params):
             'sigma': float(params.evo_es_sigma),
             'chunk': int(params.evo_dust_chunk),
             'allocation': str(params.evo_dust_allocation).strip().lower(),
+            'draw_scale': float(params.evo_dust_draw_scale),
+            'draws': list(params.evo_dust_draws) if params.evo_dust_draws else None,
             'es_draws': int(params.evo_dust_es_draws),
             'es_sigma': float(params.evo_dust_es_sigma),
             'grad_cos_freq': int(params.evo_es_grad_cos_freq),
@@ -935,6 +956,9 @@ def _make_evo_args(params):
             'rmsprop_eps': float(params.evo_es_rmsprop_eps),
             'sgd_momentum': float(params.evo_es_sgd_momentum),
         }
+        if moea == 'cadust':
+            evo_kwargs.update({'rank': int(params.evo_cadust_rank), 'decay': float(params.evo_cadust_decay),
+                               'subspace_fraction': float(params.evo_cadust_subspace_fraction)})
         if moea == 'mo_upgrad_dust':
             evo_kwargs.update({'upgrad_norm_eps': float(params.upgrad_norm_eps),
                                'upgrad_reg_eps': float(params.upgrad_reg_eps)})

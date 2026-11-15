@@ -21,11 +21,17 @@ DUST is single-objective, as in the paper. The multi-objective variants reward e
 one gradient estimate per task, the rows ``g_k`` of ``J`` (``[K, D]``), combined by an MTL aggregator into the
 direction (``aggregate`` of :func:`run_dust`): their sum (MO-Sum-DUST, :mod:`.mo_sum_dust`; equal to DUST up to
 rounding), UPGrad (MO-UPGrad-DUST, :mod:`.mo_upgrad_dust`) or MGDA (MO-MGDA-DUST, :mod:`.mo_mgda_dust`).
+A-DUST (:mod:`.a_dust`, ``antithetic``) replaces the independent draws and the chunk centering of step 2 by
+antithetic pairs ``y +- sigma a`` rewarded by half their loss difference; the rest is unchanged.
+CADUST (:mod:`.cadust`) learns a low-rank covariance for the draws and corrects the error estimate for that covariance.
 
 Each draw is one forward pass of the batch, as one member of an OpenES population of ``pop_size``; the jitter is as
 large as the site's activations (for a convolution, far more numbers than its weights), so drawing it adds to the
-cost. The draws are split over the sites equally (``allocation="equal"``) or in proportion to their output size per
-sample (``"width"``), in multiples of ``chunk``.
+cost. The ``pop_size`` draws are split over the sites equally (``allocation="equal"``) or in proportion to their output
+size per sample (``"width"``), in multiples of ``chunk``. With ``"log"`` each site gets its own count from its output
+size ``d`` per sample, the CMA-ES default population ``draw_scale * (4 + floor(3 ln d))`` rounded up to whole chunks,
+and ``pop_size`` is unused. With ``"custom"`` the counts are given per site (``draws``, multiples of ``chunk``), in the
+order the forward pass calls the sites.
 
 Differences from the transformer recipe of the paper. There, a jitter is credited with the loss change at its own
 token, plus a decayed credit over later tokens for the attention internals; here the credit is per sample, which is
@@ -59,7 +65,7 @@ from .es_common import (
     true_jacobian,
 )
 
-ALLOCATIONS = ("equal", "width")
+ALLOCATIONS = ("equal", "width", "log", "custom")
 CONV_WEIGHT = {nn.Conv1d: torch.nn.grad.conv1d_weight, nn.Conv2d: torch.nn.grad.conv2d_weight,
                nn.Conv3d: torch.nn.grad.conv3d_weight}
 
@@ -69,14 +75,25 @@ class DUST:
     to its output during a draw (see the module docstring). :meth:`estimate` returns the gradient of the summed loss,
     or with ``per_task`` one gradient per task loss."""
 
+    name = "DUST"
+
     def __init__(self, trainer: Any, pop_size: int, sigma: float, chunk: int, allocation: str, es_draws: int,
-                 es_sigma: float, gen: torch.Generator, per_task: bool = False):
+                 es_sigma: float, gen: torch.Generator, per_task: bool = False, draw_scale: float = 1.0,
+                 draws: Optional[list] = None, antithetic: bool = False):
         if trainer.multi_input:
             raise NotImplementedError("DUST needs one input batch shared by the tasks (multi_input=False).")
         if allocation not in ALLOCATIONS:
             raise ValueError(f"Unknown DUST allocation {allocation!r}; options: {ALLOCATIONS}")
+        if antithetic and int(chunk) % 2:
+            raise ValueError(f"A-DUST needs an even chunk (chunk / 2 antithetic pairs per forward pass), got {chunk}.")
         self.trainer, self.model, self.gen = trainer, trainer.model, gen
         self.pop_size, self.sigma, self.chunk, self.allocation = int(pop_size), float(sigma), int(chunk), allocation
+        self.antithetic = bool(antithetic)
+        self.draw_scale = float(draw_scale)
+        self.custom = [int(n) for n in draws] if draws else None
+        if allocation == "custom" and (not self.custom or any(n < self.chunk or n % self.chunk for n in self.custom)):
+            raise ValueError(f"DUST custom allocation needs draws per site in multiples of chunk={self.chunk}, "
+                             f"got {draws}.")
         self.es_draws, self.es_sigma = int(es_draws), float(es_sigma)
         # objectives = W @ task losses: their sum (DUST) or each task loss (MO-Sum-DUST)
         K = len(trainer.task_name)
@@ -131,21 +148,39 @@ class DUST:
         self.sites = {n: m for n, m in self.sites.items() if n in self.inputs}
         covered = {id(p) for m in self.sites.values() for p in m.parameters(recurse=False)}
         self.free = [p for p in self.model.parameters() if id(p) not in covered]
-        # one chunk per site, the other chunks in proportion to the share (largest remainder: exactly pop_size draws)
-        share = {n: (sum(math.prod(s[1:]) for s in self.shapes[n]) if self.allocation == "width" else 1.0)
-                 for n in self.sites}
-        units = self.pop_size // self.chunk - len(share)
-        if units < 0:
-            raise ValueError(f"DUST needs pop_size >= chunk * sites = {self.chunk * len(share)}, got {self.pop_size}.")
-        quota = {n: units * s / sum(share.values()) for n, s in share.items()}
-        extra = {n: int(q) for n, q in quota.items()}
-        for n in sorted(quota, key=lambda n: quota[n] - extra[n], reverse=True)[:units - sum(extra.values())]:
-            extra[n] += 1
-        self.draws = {n: self.chunk * (1 + extra[n]) for n in share}
-        print(f"[EvoMTL] DUST: {sum(self.draws.values())} direct draws per generation ({self.allocation}): "
+        widths = {n: sum(math.prod(s[1:]) for s in self.shapes[n]) for n in self.sites}  # output size per sample
+        if self.allocation == "custom":
+            if len(self.custom) != len(widths):
+                raise ValueError(f"DUST custom allocation: {len(self.custom)} draw counts for {len(widths)} sites "
+                                 f"({', '.join(widths)}).")
+            order = list(self.inputs)  # sites in the order the forward pass calls them
+            self.draws = {n: dict(zip(order, self.custom))[n] for n in widths}
+        elif self.allocation == "log":  # CMA-ES population rule per site, rounded up to whole chunks
+            self.draws = {n: self.chunk * math.ceil(self.draw_scale * (4 + math.floor(3 * math.log(d))) / self.chunk)
+                          for n, d in widths.items()}
+        else:  # one chunk per site, the other chunks in proportion to the share (largest remainder: pop_size draws)
+            share = {n: (d if self.allocation == "width" else 1.0) for n, d in widths.items()}
+            units = self.pop_size // self.chunk - len(share)
+            if units < 0:
+                raise ValueError(f"DUST needs pop_size >= chunk * sites = {self.chunk * len(share)}, "
+                                 f"got {self.pop_size}.")
+            quota = {n: units * s / sum(share.values()) for n, s in share.items()}
+            extra = {n: int(q) for n, q in quota.items()}
+            for n in sorted(quota, key=lambda n: quota[n] - extra[n], reverse=True)[:units - sum(extra.values())]:
+                extra[n] += 1
+            self.draws = {n: self.chunk * (1 + extra[n]) for n in share}
+        total = sum(self.draws.values())
+        print(f"[EvoMTL] {self.name}: {total} direct draws per generation"
+              + (f" ({total // 2} antithetic pairs)" if self.antithetic else "") + f" ({self.allocation}): "
               + ", ".join(f"{n}={d}" for n, d in self.draws.items())
               + (f" | weight-space ES on {sum(p.numel() for p in self.free)} other weights: {self.es_draws} pairs"
                  if self.free else ""), flush=True)
+
+    def _sample_noise(self, name: str, samples: int) -> list:
+        return [torch.randn(samples, *s[1:], generator=self.gen, device=self.gen.device) for s in self.shapes[name]]
+
+    def _finish_site(self, name: str, errors: list) -> list:
+        return errors
 
     @torch.no_grad()
     def estimate(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -162,25 +197,32 @@ class DUST:
         clean = self.W @ task_losses  # [M, B]
         K, B = clean.shape  # K: number of objectives from here on
         n = self.chunk
+        m = n // 2 if self.antithetic else n  # noise draws per forward pass: n / 2 pairs (a, -a), or n draws
         x = inputs.repeat(n, *(1,) * (inputs.dim() - 1))
         y = {t: g.repeat(n, *(1,) * (g.dim() - 1)) for t, g in gts.items()}
 
         grads: Dict[nn.Parameter, torch.Tensor] = {}
         for name, draws in self.draws.items():
             shapes = self.shapes[name]
+            count = draws // 2 if self.antithetic else draws  # the average runs over the pairs, not the evaluations
             errors = [torch.zeros(K, *s, device=clean.device) for s in shapes]
             for _ in range(draws // n):
-                noise = [torch.randn(n * B, *s[1:], generator=self.gen, device=self.gen.device) for s in shapes]
-                self.jitter = {name: [self.sigma * a for a in noise]}
+                noise = self._sample_noise(name, m * B)
+                # antithetic: draw k of sample b at row k*B + b with +a, its pair at row (m + k)*B + b with -a
+                self.jitter = {name: [self.sigma * (torch.cat([a, -a]) if self.antithetic else a) for a in noise]}
                 try:
-                    reward = clean.unsqueeze(1) - (self.W @ self.losses(x, y)).view(K, n, B)
+                    loss = (self.W @ self.losses(x, y)).view(K, n, B)
                 finally:
                     self.jitter = {}
-                if n > 1:
-                    reward = reward - reward.mean(1, keepdim=True)
+                if self.antithetic:  # r = (l(y - sigma a) - l(y + sigma a)) / 2 at each sample, no centering
+                    reward = (loss[:, m:] - loss[:, :m]) / 2
+                else:  # loss reduction at each sample, centered over the chunk
+                    reward = clean.unsqueeze(1) - loss
+                    if n > 1:
+                        reward = reward - reward.mean(1, keepdim=True)
                 for e, a in zip(errors, noise):
-                    e -= torch.einsum("knb,nb...->kb...", reward, a.view(n, B, *a.shape[1:])) / (self.sigma * draws)
-            self._reassemble(self.sites[name], errors, self.inputs[name], grads)
+                    e -= torch.einsum("knb,nb...->kb...", reward, a.view(m, B, *a.shape[1:])) / (self.sigma * count)
+            self._reassemble(self.sites[name], self._finish_site(name, errors), self.inputs[name], grads)
         if self.free:
             self._weight_space(inputs, gts, grads, K)
         J = torch.cat([grads[p].reshape(K, -1) if p in grads else torch.zeros(K, p.numel(), device=clean.device)
@@ -244,6 +286,8 @@ def run_dust(
     sigma: float = 0.05,
     chunk: int = 8,
     allocation: str = "equal",
+    draw_scale: float = 1.0,
+    draws: Optional[list] = None,
     es_draws: int = 8,
     es_sigma: float = 0.03,
     optim: str = "adam",
@@ -260,7 +304,9 @@ def run_dust(
     evo_eval_freq: int = 1,
     grad_cos_freq: int = 1,
     aggregate: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None,
+    antithetic: bool = False,
     method: str = "DUST",
+    _estimator: Callable[..., DUST] = DUST,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """DUST training of the weights ``theta`` from ``theta_0`` (see module docstring); the trainer ends at ``theta``.
@@ -268,11 +314,17 @@ def run_dust(
     Parameters
     ----------
     pop_size : int
-        Direct draws (forward passes of the batch) per generation, split over the sites by ``allocation``.
+        Direct draws (forward passes of the batch) per generation, split over the sites by ``allocation``
+        (unused with ``"log"``).
+    draw_scale : float
+        ``allocation="log"``: multiplier of the per-site CMA-ES population ``4 + floor(3 ln d)``.
+    draws : list of int, optional
+        ``allocation="custom"``: draws per site, in the order the forward pass calls the sites.
     sigma : float
         Std of the jitter on the site outputs (activation units, not weight units).
     chunk : int
-        Draws per forward pass (the batch repeated); the rewards are centered over them.
+        Draws per forward pass (the batch repeated); the rewards are centered over them. With ``antithetic``: even,
+        ``chunk / 2`` pairs per forward pass, no centering.
     es_draws, es_sigma
         Antithetic pairs and std of the weight-space ES on the parameters outside the sites (unused without them).
     lr, optim, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps, sgd_momentum
@@ -285,22 +337,27 @@ def run_dust(
         Multi-objective DUST: one estimate per task loss, combined by ``aggregate(J, losses) -> (direction, w)``
         (``J``: ``[K, D]`` task gradients, ``losses``: ``[K]`` task losses on the batch, ``w``: ``[K]`` weights of
         the rows, logged). ``None``: DUST on the summed loss.
+    antithetic : bool
+        A-DUST (:mod:`.a_dust`): the draws of a site are ``draws / 2`` antithetic pairs; every draw count (``pop_size``,
+        ``draws``) still counts forward evaluations, so the cost per generation is that of DUST.
     method : str
         Logged name of the method.
     """
     if trainer.theta_0 is None:
         raise RuntimeError("prepare_evolution() first.")
-    if int(chunk) < 1 or int(pop_size) < int(chunk):
+    if int(chunk) < 1 or (allocation in ("equal", "width") and int(pop_size) < int(chunk)):
         raise ValueError(f"DUST needs 1 <= chunk <= pop_size, got chunk={chunk}, pop_size={pop_size}.")
     configure_moea_random_seed(seed)
     gen = torch.Generator(trainer.device).manual_seed(int(seed))
     per_task = aggregate is not None
-    dust = DUST(trainer, pop_size, sigma, chunk, allocation, es_draws, es_sigma, gen, per_task)
+    dust = _estimator(trainer, pop_size, sigma, chunk, allocation, es_draws, es_sigma, gen, per_task, draw_scale,
+                      draws, antithetic)
 
     theta = trainer.theta_0.detach().cpu().float().clone().requires_grad_(True)
     optim = str(optim).strip().lower()
     optimizer = make_es_optimizer([theta], optim, lr, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps, sgd_momentum)
-    print(f"[EvoMTL] {method}: dims={theta.numel()} | pop={pop_size} | chunk={chunk} | optim={optim} lr={lr} | "
+    pop = {"log": f"log rule x{draw_scale}", "custom": f"custom {draws}"}.get(allocation, pop_size)
+    print(f"[EvoMTL] {method}: dims={theta.numel()} | pop={pop} | chunk={chunk} | optim={optim} lr={lr} | "
           f"sigma={sigma}", flush=True)
 
     tasks = list(trainer.task_name)

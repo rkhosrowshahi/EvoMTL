@@ -7,6 +7,8 @@ from .pga import os_nmf_pga_aggregate, svd_pga_aggregate
 from .mo_aligned_mtl_guidedes import run_mo_aligned_mtl_guidedes
 from .mo_aligned_mtl_openes import aligned_mtl_aggregate, run_mo_aligned_mtl_openes
 from .dcpsl_es import run_dcpsl_es
+from .a_dust import run_a_dust
+from .cadust import run_cadust
 from .dust import run_dust
 from .guidedes import run_guidedes
 from .hv import (
@@ -62,6 +64,8 @@ __all__ = [
     "run_mo_aligned_mtl_guidedes",
     "run_mo_aligned_mtl_openes",
     "run_dcpsl_es",
+    "run_a_dust",
+    "run_cadust",
     "run_dust",
     "run_guidedes",
     "run_mo_cagrad_guidedes",

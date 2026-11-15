@@ -1,6 +1,6 @@
-"""DUST and MO-*-DUST: exact local maps, convergence of the forward-only estimate, DUST = MO-Sum-DUST, the UPGrad / MGDA
-aggregators, fallback ES, and the training loops."""
+"""DUST variants: exact local maps, convergence, antithetic and adaptive noise, aggregators, and training loops."""
 import contextlib
+import math
 import csv
 import io
 import tempfile
@@ -11,14 +11,17 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
+from LibMTL.config import LibMTL_args, _make_evo_args
 from LibMTL.evomtl.evo_trainer import EvoMTLTrainer
+from LibMTL.evomtl.moea.a_dust import run_a_dust
+from LibMTL.evomtl.moea.cadust import CADUST, _Curvature
 from LibMTL.evomtl.moea.dust import DUST, run_dust
 from LibMTL.evomtl.moea.mo_mgda_dust import mgda_aggregate, run_mo_mgda_dust
 from LibMTL.evomtl.moea.mo_sum_dust import run_mo_sum_dust
 from LibMTL.evomtl.moea.mo_upgrad_dust import run_mo_upgrad_dust
 from LibMTL.evomtl.moea.es_common import upgrad_aggregate
-from LibMTL.loss import CELoss
-from LibMTL.metrics import AccMetric
+from LibMTL.loss import CELoss, MSELoss
+from LibMTL.metrics import AccMetric, L1Metric
 
 TASKS = ('a', 'b')
 
@@ -30,9 +33,10 @@ class Data(Dataset):
         return torch.randn(1, 6, 6, generator=g), {'a': i % 3, 'b': (i // 3) % 3}
 
 
-def make_trainer(directory=None, shared=True, norm=False):
+def make_trainer(directory=None, shared=True, norm=False, regression=False):
     torch.manual_seed(3)
-    tasks = {t: dict(metrics=['Acc'], metrics_fn=AccMetric(), loss_fn=CELoss(), weight=[1]) for t in TASKS}
+    tasks = {t: dict(metrics=['L1'], metrics_fn=L1Metric(), loss_fn=MSELoss(), weight=[0]) if regression else
+             dict(metrics=['Acc'], metrics_fn=AccMetric(), loss_fn=CELoss(), weight=[1]) for t in TASKS}
     encoder = lambda: nn.Sequential(nn.Conv2d(1, 3, 3), nn.ReLU(), nn.Flatten(), nn.Linear(48, 8),
                                     *([nn.LayerNorm(8)] if norm else []), nn.Tanh())
     head = nn.Linear(8, 3)  # shared: one decoder module called once per task
@@ -106,6 +110,142 @@ class DUSTTests(unittest.TestCase):
             self.assertGreater(cos(J[k], J_true[k]), .95)
         self.assertEqual(tuple(losses.shape), (len(TASKS),))
 
+    def test_antithetic_pairs_negate_one_noise_draw(self):
+        """A-DUST: each forward pass of a site (the batch repeated chunk = 4 times) holds 2 pairs, +sigma a on the first
+        two copies and -sigma a of the same draw on the last two, at every call of the shared head."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            trainer = make_trainer()  # shared head: two calls per forward
+            x, y = batch()
+            dust = DUST(trainer, 24, .05, 4, 'equal', 0, .03, torch.Generator().manual_seed(0), antithetic=True)
+            seen = {}
+            hooks = [m.register_forward_hook(lambda m, a, o, n=n: seen.setdefault(n, []).append(
+                dust.jitter[n][dust.calls[n]]) if n in dust.jitter else None) for n, m in dust.sites.items()]
+            dust.estimate(x, y)
+            for h in hooks:
+                h.remove()
+            with self.assertRaises(ValueError):
+                DUST(trainer, 24, .05, 3, 'equal', 0, .03, torch.Generator(), antithetic=True)  # odd chunk
+        self.assertEqual(set(seen), set(dust.draws))
+        for n, jitters in seen.items():
+            self.assertEqual(len(jitters), len(dust.shapes[n]) * dust.draws[n] // 4)  # every call of every pass
+            for j in jitters:
+                j = j.view(4, len(x), *j.shape[1:])
+                self.assertTrue(torch.equal(j[2:], -j[:2]))
+                self.assertFalse(torch.equal(j[0], j[1]))  # the two pairs are independent draws
+
+    def test_antithetic_estimate_is_exact_for_a_quadratic_loss(self):
+        """With a squared error the pair difference is exactly 2 sigma g.a (the even-order terms cancel), so the A-DUST
+        error at a head is (1 / K) sum_k (g.a_k) a_k over its K pairs, g[b] = dL[b] / dy[b] (sign, the average over
+        pairs and the per-sample credit), and its weight gradient the local linear map of that error."""
+        sigma = .05
+        with contextlib.redirect_stdout(io.StringIO()):
+            trainer = make_trainer(shared=False, regression=True)
+            x, _ = batch()
+            B = len(x)
+            y = {t: torch.randn(B, 3, generator=torch.Generator().manual_seed(1)) for t in TASKS}
+            dust = DUST(trainer, 32, sigma, 4, 'equal', 0, .03, torch.Generator().manual_seed(0), antithetic=True)
+            head = trainer.model.decoders['a']
+            seen = []
+            hook = head.register_forward_hook(
+                lambda m, a, o: seen.append(dust.jitter['decoders.a'][0]) if 'decoders.a' in dust.jitter else None)
+            J, _ = dust.estimate(x, y)
+            hook.remove()
+            g = 2 * (trainer.model(x)['a'] - y['a']).detach() / 3  # gradient of the per-sample mean_j (y_j - t_j)^2
+        a = torch.cat([j.view(4, B, 3)[:2] for j in seen]) / sigma  # the + member of every pair: [K, B, 3]
+        self.assertEqual(len(a), dust.draws['decoders.a'] // 2)
+        e = torch.einsum('kb,kbo->bo', torch.einsum('bo,kbo->kb', g, a), a) / len(a)
+        params = list(trainer.model.parameters())
+        start = sum(p.numel() for p in params[:next(i for i, p in enumerate(params) if p is head.weight)])
+        expected = torch.cat([(e.T @ dust.inputs['decoders.a'][0]).reshape(-1), e.sum(0)]) / B  # weight, bias
+        torch.testing.assert_close(J[0, start:start + len(expected)], expected, rtol=1e-4, atol=1e-6)
+
+    def test_antithetic_estimate_converges_to_backprop(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            trainer = make_trainer(shared=False)
+            x, y = batch()
+            J, _ = DUST(trainer, 4096, .01, 16, 'width', 0, .03, torch.Generator().manual_seed(0),
+                        antithetic=True).estimate(x, y)
+        self.assertGreater(cos(J[0], true_jacobian(trainer, x, y).sum(0)), .95)
+
+    def test_cadust_learns_and_samples_a_low_rank_covariance(self):
+        # Two known curvature directions with second moments 4 and 1; the weaker direction is truncated.
+        strong = torch.tensor([.6, .8, 0.])
+        weak = torch.tensor([0., 0., 1.])
+        state = _Curvature(width=3, rank=1, decay=0.5, fraction=0.5)
+        gen = torch.Generator().manual_seed(7)
+        state.update(torch.stack([2 * strong, -2 * strong, weak, -weak]))
+        torch.testing.assert_close(state.basis @ state.basis.T, torch.outer(strong, strong))
+
+        expected = 0.5 * torch.eye(3) + 1.5 * torch.outer(strong, strong)
+        draws = state.sample(30_000, gen)
+        torch.testing.assert_close(draws.T @ draws / len(draws), expected, atol=.025, rtol=0)
+        torch.testing.assert_close(state.inverse(expected), torch.eye(3), atol=1e-6, rtol=0)
+
+        # This batch is weaker than the prior before discount, but stronger after discount.
+        state.update(torch.stack([1.2 * weak, -1.2 * weak]))
+        torch.testing.assert_close(state.basis @ state.basis.T, torch.outer(weak, weak))
+
+    def test_cadust_warmup_and_shared_site_match_dust_contract(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            trainer = make_trainer(shared=True)
+            x, y = batch()
+            args = (trainer, 48, .05, 4, 'equal', 0, .03)
+            baseline = DUST(*args, torch.Generator().manual_seed(3))
+            expected, _ = baseline.estimate(x, y)
+            expected_next, _ = baseline.estimate(x, y)
+            baseline.close()
+            for rank in (0, 2):
+                cadust = CADUST(*args, torch.Generator().manual_seed(3), rank=rank)
+                first, _ = cadust.estimate(x, y)
+                next_estimate, _ = cadust.estimate(x, y)
+                cadust.close()
+                torch.testing.assert_close(first, expected, rtol=0, atol=0)
+                if not rank:
+                    torch.testing.assert_close(next_estimate, expected_next, rtol=0, atol=0)
+                else:
+                    self.assertEqual(cadust.curvature['decoders.a'][1].basis.shape, (6, 2))
+                    self.assertTrue(torch.isfinite(next_estimate).all())
+                    self.assertFalse(torch.equal(next_estimate, expected_next))
+
+    def test_cadust_cli_trains_with_no_backprop_diagnostic(self):
+        params = LibMTL_args.parse_args(['--evo_training', '--evo_moea', 'CADUST', '--evo_iterations', '3',
+                                         '--evo_pop_size', '32', '--evo_es_grad_cos_freq', '0',
+                                         '--evo_eval_freq', '0', '--evo_cadust_rank', '2',
+                                         '--evo_cadust_decay', '.8', '--evo_cadust_subspace_fraction', '.3'])
+        evo = _make_evo_args(params)
+        self.assertEqual([evo['evo_kwargs'][k] for k in ('rank', 'decay', 'subspace_fraction')], [2, .8, .3])
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
+            trainer = make_trainer(directory)
+            loader = DataLoader(Data(), batch_size=8)
+            out = trainer._run_moea(evo['moea'].lower(), loader, None, evo['evo_kwargs'])
+            with (Path(directory) / 'metrics.csv').open() as stream:
+                rows = list(csv.DictReader(stream))
+        self.assertEqual(out['method'], 'CADUST')
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(not row['true_cos_direction'] for row in rows))
+        theta = torch.nn.utils.parameters_to_vector(trainer.model.parameters()).detach()
+        self.assertFalse(torch.equal(theta, trainer.theta_0))
+        self.assertFalse(any(m._forward_hooks for m in trainer.model.modules()))
+
+    def test_log_allocation_uses_the_cma_es_rule_per_layer(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            trainer = make_trainer()  # outputs per sample: conv 3x4x4 = 48, linear 8, shared head 3 + 3 (two calls)
+            x, y = batch()
+            dust = DUST(trainer, 0, .05, 4, 'log', 0, .03, torch.Generator().manual_seed(0), draw_scale=2.0)
+            dust.estimate(x, y)
+        expected = {d: 4 * -(-int(2 * (4 + int(3 * math.log(d)))) // 4) for d in (48, 8, 6)}  # ceil to chunks of 4
+        self.assertEqual(sorted(dust.draws.values()), sorted(expected.values()))
+
+    def test_custom_allocation_follows_the_forward_order(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            trainer = make_trainer(shared=False)  # forward order: conv, linear, head a, head b
+            x, y = batch()
+            dust = DUST(trainer, 0, .05, 4, 'custom', 0, .03, torch.Generator().manual_seed(0), draws=[12, 8, 4, 4])
+            dust.estimate(x, y)
+        self.assertEqual(dust.draws, {'encoder.0': 12, 'encoder.3': 8, 'decoders.a': 4, 'decoders.b': 4})
+        with self.assertRaises(ValueError):
+            DUST(trainer, 0, .05, 4, 'custom', 0, .03, torch.Generator(), draws=[6, 8, 4, 4])  # not a multiple of 4
+
     def test_summed_loss_equals_summed_task_estimates(self):
         """Same noise: DUST on the summed loss and the sum of the MO-Sum-DUST task estimates agree up to rounding
         (also through the weight-space ES of the LayerNorm)."""
@@ -145,11 +285,11 @@ class DUSTTests(unittest.TestCase):
             torch.testing.assert_close(G @ d, (d @ d).repeat(2))  # ... equal descent g~_k . d = ||d||^2
 
     def test_runners_train_and_report(self):
-        runners = ((run_dust, {}, 'DUST'), (run_mo_sum_dust, {}, 'MO-Sum-DUST'),
+        runners = ((run_dust, {}, 'DUST'), (run_a_dust, {}, 'A-DUST'), (run_mo_sum_dust, {}, 'MO-Sum-DUST'),
                    (run_mo_upgrad_dust, {}, 'MO-UPGrad-DUST'), (run_mo_mgda_dust, {}, 'MO-MGDA-DUST'),
                    (run_mo_mgda_dust, {'grad_norm': 'loss'}, 'MO-MGDA-Loss-DUST'))
         for runner, extra, method in runners:
-            per_task = method != 'DUST'
+            per_task = method not in ('DUST', 'A-DUST')
             with self.subTest(method), tempfile.TemporaryDirectory() as directory, \
                     contextlib.redirect_stdout(io.StringIO()):
                 trainer = make_trainer(directory)

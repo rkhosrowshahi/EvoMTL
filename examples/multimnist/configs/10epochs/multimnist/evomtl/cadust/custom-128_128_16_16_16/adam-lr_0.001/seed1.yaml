@@ -1,0 +1,41 @@
+# CADUST with 304 direct draws per generation: 2344 generations x 256 images.
+mode: train
+seed: 1
+gpu_id: "0"
+
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0
+
+evo_training: true
+evo_schedule: evolution
+evo_moea: cadust
+evo_iterations: 2344
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 1
+evo_es_lr: 0.001
+evo_es_optim: adam
+evo_es_sigma: 0.05
+evo_dust_chunk: 8
+evo_dust_allocation: custom
+evo_dust_draws: [128, 128, 16, 16, 16]  # conv1, conv2, fc, top-left head, bottom-right head
+evo_cadust_rank: 8
+evo_cadust_decay: 0.9
+evo_cadust_subspace_fraction: 0.5
+evo_es_grad_cos_freq: 0
+
+save_path: logs/multimnist/10epochs/cadust/custom-128_128_16_16_16/adam-lr_1e-3/seed_1/
+wandb_enable: true
+wandb_entity: rasa_research
+wandb_project: evomtl-multimnist
+wandb_name: cadust-10epochs-custom-128_128_16_16_16-adam-lr_0.001-seed1
+wandb_group: cadust-10epochs-custom-128_128_16_16_16-adam-lr_0.001

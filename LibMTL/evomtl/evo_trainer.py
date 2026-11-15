@@ -47,6 +47,8 @@ import wandb
 from ..trainer import Trainer
 from .moea.common import epoch_fraction_eval_steps
 from .moea.comocma import run_comocma
+from .moea.a_dust import run_a_dust
+from .moea.cadust import run_cadust
 from .moea.dust import run_dust
 from .moea.mo_mgda_dust import run_mo_mgda_dust
 from .moea.mo_sum_dust import run_mo_sum_dust
@@ -116,6 +118,8 @@ ES_RUNNERS = {
     "mo_camgda_openes": run_mo_camgda_openes,
     "mo_camgda_guidedes": run_mo_camgda_guidedes,
     "dust": run_dust,
+    "a_dust": run_a_dust,
+    "cadust": run_cadust,
     "mo_sum_dust": run_mo_sum_dust,
     "mo_upgrad_dust": run_mo_upgrad_dust,
     "mo_mgda_dust": run_mo_mgda_dust,

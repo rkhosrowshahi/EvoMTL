@@ -1,0 +1,53 @@
+# Sigma sweep, DUST vs A-DUST at equal cost: A-DUST with jitter std 0.4 on every layer output,
+# 128 forward evaluations per generation (A-DUST: 64 antithetic pairs), 500 generations x 256
+# images (~2.1 epochs), seed 1. Otherwise as configs/10epochs/multimnist/evomtl/a_dust/pop_128/
+# adam-lr_0.001/seed1.yaml.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Model (shared LeNet encoder, one head per task)
+weighting: EW                  # gradient-descent loss weighting; unused here (epochs: 0)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0                      # no gradient-descent phase: training is forward-only
+
+# A-DUST; evo_moea selects the algorithm
+evo_training: true
+evo_schedule: evolution        # evolutionary training only, no gradient descent
+evo_moea: a_dust
+evo_iterations: 500           # tuning budget: ~2.1 epochs
+evo_pop_size: 128             # forward evaluations of the batch per generation (64 antithetic pairs)
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 1
+evo_es_lr: 0.001
+evo_es_optim: adam            # optimizer on the weights (sgd, adam or rmsprop); evo_es_lr is its learning rate
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.4            # jitter std on the layer outputs (activation units)
+evo_dust_chunk: 8             # evaluations per forward pass (even): 4 antithetic pairs
+evo_dust_allocation: equal    # same evaluations per layer (width: in proportion to its output size per image)
+evo_es_grad_cos_freq: 1       # log cosine(A-DUST estimate, backprop gradient); 0 = off
+
+# Paths
+save_path: logs/multimnist/tune_dust_sigma/a_dust/pop_128/adam-lr_1e-3-sigma_0.4/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_enable: false
+wandb_project: evomtl-multimnist
+wandb_name: a_dust-tune_sigma-pop_128-adam-lr_0.001-sigma_0.4-seed1
+wandb_group: a_dust-tune_sigma-pop_128-adam-lr_0.001-sigma_0.4

@@ -61,7 +61,7 @@ Important arguments:
 
 | `evo_schedule` | Training |
 | --- | --- |
-| `evolution` | Multi-objective evolutionary training from the initial weights, no gradient descent (`epochs: 0`). Either a Pareto set / front (NSGA-II, MOPSO-CD and COMO-CMA through `evo_moea`, or Pareto set learning with ES, `evo_moea: psl_es`) or a single network from an evolution strategy: `openes` / `guidedes` (OpenES / Guided ES on the sum of losses), `snes` / `pgpe` (per-parameter step sizes), `mo_upgrad_openes` / `mo_upgrad_guidedes` (per-objective pseudo-gradients combined by UPGrad), `mo_mean_openes` (their mean), `mo_mgda_openes` / `mo_mgda_guidedes` / `mo_mgda_openes_libmtl` (MGDA common descent direction, `evo_mgda_*` flags), or `dust` (DUST: forward-only gradient estimates from jittering every Linear / convolution output per image, on the sum of losses; `evo_pop_size` draws per generation, `evo_es_sigma` the jitter std, `evo_dust_*` flags) / `mo_sum_dust` (MO-Sum-DUST: one DUST estimate per task loss, summed) / `mo_upgrad_dust` (MO-UPGrad-DUST: combined by UPGrad) / `mo_mgda_dust` (MO-MGDA-DUST: combined by LibMTL MGDA; `evo_mgda_grad_norm: loss` gives MO-MGDA-Loss-DUST). One file per algorithm in `LibMTL/evomtl/moea/`. |
+| `evolution` | Multi-objective evolutionary training from the initial weights, no gradient descent (`epochs: 0`). Either a Pareto set / front (NSGA-II, MOPSO-CD and COMO-CMA through `evo_moea`, or Pareto set learning with ES, `evo_moea: psl_es`) or a single network from an evolution strategy: `openes` / `guidedes` (OpenES / Guided ES on the sum of losses), `snes` / `pgpe` (per-parameter step sizes), `mo_upgrad_openes` / `mo_upgrad_guidedes` (per-objective pseudo-gradients combined by UPGrad), `mo_mean_openes` (their mean), `mo_mgda_openes` / `mo_mgda_guidedes` / `mo_mgda_openes_libmtl` (MGDA common descent direction, `evo_mgda_*` flags), or `dust` (DUST: forward-only gradient estimates from jittering every Linear / convolution output per image, on the sum of losses; `evo_pop_size` draws per generation, `evo_es_sigma` the jitter std, `evo_dust_*` flags) / `a_dust` (A-DUST: DUST with antithetic jitter pairs `y ± sigma a` on the same image, rewarded by half their loss difference without centering; even `evo_dust_chunk`) / `mo_sum_dust` (MO-Sum-DUST: one DUST estimate per task loss, summed) / `mo_upgrad_dust` (MO-UPGrad-DUST: combined by UPGrad) / `mo_mgda_dust` (MO-MGDA-DUST: combined by LibMTL MGDA; `evo_mgda_grad_norm: loss` gives MO-MGDA-Loss-DUST). One file per algorithm in `LibMTL/evomtl/moea/`. |
 | `gd_then_evolution` (default) | `epochs` of multi-objective gradient descent with `weighting`, then the same evolutionary training as fine-tuning that shapes the Pareto front. |
 
 ```shell
@@ -76,6 +76,17 @@ python main.py --weighting EW --arch HPS --epochs 30 --evo_training --evo_schedu
 The ES methods (`openes`, `mo_upgrad_openes`, `mo_mgda_openes`, `psl_es`, ...) use raw fitness by default (`evo_es_fitness_shaping: raw`): the losses minus the population mean, or the unranked pair differences for PSL. Set `evo_es_fitness_shaping: centered_ranks` for the rank-based OpenAI-ES estimator; PSL's `evo_psl_rank_groups` > 1 needs it.
 
 See [docs/evolutionary_algorithms.md](docs/evolutionary_algorithms.md) for the methods, options, configs, outputs and plotting scripts.
+
+To run **CADUST** on MultiMNIST with the custom DUST allocation of 304 draws per generation:
+
+```shell
+python main.py --config configs/10epochs/multimnist/evomtl/cadust/custom-128_128_16_16_16/adam-lr_0.001/seed1.yaml
+```
+
+CADUST starts with ordinary DUST noise and uses each batch's estimated activation gradients to learn directions
+for the next batch. It uses the same number of forward passes, and `evo_es_sigma` still sets the RMS jitter per
+activation. The optional backprop cosine diagnostic is off in this config. See the
+[CADUST settings and update rule](../../LibMTL/evomtl/README.md#cadust).
 
 Full help:
 

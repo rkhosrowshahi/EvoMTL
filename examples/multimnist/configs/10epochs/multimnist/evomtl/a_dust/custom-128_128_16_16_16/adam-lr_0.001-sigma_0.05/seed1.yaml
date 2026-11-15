@@ -1,0 +1,55 @@
+# 10-epoch protocol (PaMaL's budget): 2344 generations x 256 images = 10 epochs.
+# A-DUST with custom per-layer forward evaluations, in forward order: conv1 128, conv2 128, fc 16, top-left head 16,
+# bottom-right head 16 (304 per generation; 64, 64, 8, 8, 8 antithetic pairs; evo_pop_size unused), jitter std 0.05, as DUST.
+# Same allocation as dust/custom-128_128_16_16_16/adam-lr_0.001/seed1.yaml; otherwise as
+# a_dust/custom-128_128_16_16_16/adam-lr_0.001-sigma_0.1/seed1.yaml.
+
+# General
+mode: train
+seed: 1
+gpu_id: "0"
+
+# Model (shared LeNet encoder, one head per task)
+weighting: EW                  # gradient-descent loss weighting; unused here (epochs: 0)
+arch: HPS
+rep_grad: false
+multi_input: false
+
+# Dataset
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0                      # no gradient-descent phase: training is forward-only
+
+# A-DUST; evo_moea selects the algorithm
+evo_training: true
+evo_schedule: evolution        # evolutionary training only, no gradient descent
+evo_moea: a_dust
+evo_iterations: 2344        # 10 epochs: 2,344 generations x 256 images
+evo_pop_size: 128             # unused with evo_dust_allocation: custom
+evo_num_batches: 1
+evo_eval_freq: 50
+evo_seed: 1
+evo_es_lr: 0.001
+evo_es_optim: adam            # optimizer on the weights (sgd, adam or rmsprop); evo_es_lr is its learning rate
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.05            # jitter std on the layer outputs (activation units)
+evo_dust_chunk: 8             # evaluations per forward pass (even): 4 antithetic pairs
+evo_dust_allocation: custom   # evaluations per layer from evo_dust_draws
+evo_dust_draws: [128, 128, 16, 16, 16]   # conv1, conv2, fc, top-left head, bottom-right head: 64, 64, 8, 8, 8 pairs
+evo_es_grad_cos_freq: 1       # log cosine(A-DUST estimate, backprop gradient); 0 = off
+
+# Paths
+save_path: logs/multimnist/10epochs/a_dust/custom-128_128_16_16_16/adam-lr_1e-3-sigma_0.05/seed_1/
+load_path: null
+
+# Weights & Biases
+wandb_entity: rasa_research
+wandb_enable: true
+wandb_project: evomtl-multimnist
+wandb_name: a_dust-10epochs-custom-128_128_16_16_16-adam-lr_0.001-sigma_0.05-seed1
+wandb_group: a_dust-10epochs-custom-128_128_16_16_16-adam-lr_0.001-sigma_0.05
