@@ -172,14 +172,25 @@ _parser.add_argument(
          'centre moved along fitness-oriented donor differences by --evo_es_optim at --evo_es_lr; uses '
          '--evo_es_sigma and --evo_scde_*), or dust (DUST: forward-only gradient estimates from jittering every '
          'layer output per sample, on the sum of losses; --evo_pop_size draws per generation, --evo_es_sigma the '
-         'jitter std in activation units, the --evo_es_* optimizer flags and --evo_dust_*), or a_dust (A-DUST: '
+         'jitter std in activation units, the --evo_es_* optimizer flags and --evo_dust_*), or rdust (RDUST: '
+         'reverse sequential DUST, estimating and updating each layer against the latest downstream weights; '
+         'same flags), or lw_dust (LW-DUST: layer-wise DUST, training the layers one at a time from the first to the '
+         'last, --evo_dust_inner_steps optimizer steps each on fresh mini-batches; each --evo_iterations iteration is one pass over the layers; '
+         'same flags), or rlw_dust (RLW-DUST: lw_dust from the last layer to the first; same flags), or hybrid_rlw_dust '
+         '(Hybrid-RLW-DUST: dust for --evo_dust_fraction of the --evo_iterations mini-batches, then rlw_dust; same '
+         'flags), or a_dust (A-DUST: '
          'DUST with antithetic jitter pairs +-sigma a on the same images, each rewarded by half its loss '
          'difference, no centering; same flags, an even --evo_dust_chunk, --evo_pop_size still counts '
-         'evaluations), or cadust (CADUST: DUST with a learned low-rank activation covariance; --evo_cadust_*), '
+         'evaluations), or joint_dust (Joint-DUST: the layers of each --evo_dust_groups group jittered in the same '
+         'forward pass with independent noise and credited with one shared loss; --evo_dust_antithetic flips them '
+         'together), or cadust (CADUST: DUST with a learned low-rank activation covariance; --evo_cadust_*), '
          'or mo_sum_dust '
          '(MO-Sum-DUST: one DUST estimate per task loss, summed; same flags), mo_upgrad_dust (MO-UPGrad-DUST: the '
          'per-task estimates combined by UPGrad; also --upgrad_*) or mo_mgda_dust (MO-MGDA-DUST: combined by '
-         'LibMTL MGDA; --evo_mgda_grad_norm none / loss / l2 / loss+ normalizes them first)',
+         'LibMTL MGDA; --evo_mgda_grad_norm none / loss / l2 / loss+ normalizes them first), or rfc (RFC: '
+         'readout-frame credit, exact coordinate differences of the loss at the shared representation and the '
+         'decoder outputs (decoder-only reruns), independent encoder draws scored by the linearized readout; DUST '
+         'flags, --evo_pop_size counts encoder passes; --evo_rfc_frame_chunk)',
 )
 _parser.add_argument('--evo_iterations', type=int, default=30,
                     help='MOEA outer iterations: NSGA-II / MOPSO-CD generations or COMO-CMA-ES iterations')
@@ -196,7 +207,8 @@ _parser.add_argument(
     type=int,
     default=1,
     help='during MOEA, run full test set every N generations/iterations (pymoo MOEAs/COMO-CMA); '
-         '1=every step. Also runs on the last step. 0=skip test during MOEA (train snapshot only).',
+         '1=every step. Also runs on the first and last generation; N=50 evaluates generations 1, 50, 100, ... . '
+         '0=skip test during MOEA (train snapshot only).',
 )
 _parser.add_argument(
     '--evo_eval_per_epoch',
@@ -349,6 +361,22 @@ _parser.add_argument('--evo_dust_allocation', type=str, default='equal', choices
 _parser.add_argument('--evo_dust_draws', type=int, nargs='*', default=None,
                     help='DUST with --evo_dust_allocation custom: draws per layer (multiples of --evo_dust_chunk), in '
                          'the order the forward pass calls the Linear / convolution / embedding layers')
+_parser.add_argument('--evo_dust_groups', type=int, nargs='*', default=None,
+                    help='Joint-DUST (evo_moea=joint_dust): sizes of the groups of layers jittered together, in the '
+                         'order the forward pass calls them (default: all layers in one group); the draw counts '
+                         '(--evo_pop_size, --evo_dust_allocation, --evo_dust_draws) are then per group')
+_parser.add_argument('--evo_dust_antithetic', action='store_true', default=False,
+                    help='Joint-DUST: antithetic draws, the jitter of every layer of a group flipped together '
+                         '(Joint-A-DUST; --evo_dust_chunk even)')
+_parser.add_argument('--evo_dust_balance', action='store_true', default=False,
+                    help='Joint-DUST: per-layer jitter scales that make every layer of a group move the loss equally, '
+                         'from forward-only split-half estimates of each layer\'s gradient energy; the layer with the '
+                         'least energy keeps --evo_es_sigma, the others get less (Balanced-Joint-DUST)')
+_parser.add_argument('--evo_dust_balance_decay', type=float, default=0.9,
+                    help='Joint-DUST with --evo_dust_balance: moving-average decay of the energy estimates over '
+                         'generations')
+_parser.add_argument('--evo_rfc_frame_chunk', type=int, default=64,
+                    help='RFC: coordinates moved (each +- sigma) per decoder pass of the readout frame')
 _parser.add_argument('--evo_dust_draw_scale', type=float, default=1.0,
                     help='DUST with --evo_dust_allocation log: multiplier of the per-layer draw counts')
 _parser.add_argument('--evo_dust_es_draws', type=int, default=8,
@@ -356,6 +384,13 @@ _parser.add_argument('--evo_dust_es_draws', type=int, default=8,
                          'convolution / embedding layers (normalization affines, free scalars)')
 _parser.add_argument('--evo_dust_es_sigma', type=float, default=0.03,
                     help='DUST: perturbation std of that weight-space ES')
+_parser.add_argument('--evo_dust_inner_steps', type=int, nargs='+', default=[1],
+                    help='LW-DUST / RLW-DUST (evo_moea=lw_dust / rlw_dust): optimizer steps per parameter group before moving to the next, '
+                         'one count for every group or one per group in the order the forward pass calls them '
+                         '(0 freezes a group)')
+_parser.add_argument('--evo_dust_fraction', type=float, default=0.5,
+                    help='Hybrid-RLW-DUST (evo_moea=hybrid_rlw_dust): share of the --evo_iterations mini-batch '
+                         'budget trained by DUST before switching to RLW-DUST')
 _parser.add_argument('--evo_cadust_rank', type=int, default=8,
                     help='CADUST: maximum number of learned directions per layer (0 = isotropic DUST)')
 _parser.add_argument('--evo_cadust_decay', type=float, default=0.9,
@@ -933,7 +968,7 @@ def _make_evo_args(params):
                 'guided_sigma': float(params.evo_es_guided_sigma),
                 'guided_ema': float(params.evo_es_guided_ema),
             })
-    elif moea in ('dust', 'a_dust', 'cadust', 'mo_sum_dust', 'mo_upgrad_dust', 'mo_mgda_dust'):
+    elif moea in ('dust', 'rdust', 'lw_dust', 'rlw_dust', 'hybrid_rlw_dust', 'a_dust', 'joint_dust', 'cadust', 'mo_sum_dust', 'mo_upgrad_dust', 'mo_mgda_dust', 'rfc'):
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
             'pop_size': params.evo_pop_size,
@@ -956,12 +991,23 @@ def _make_evo_args(params):
             'rmsprop_eps': float(params.evo_es_rmsprop_eps),
             'sgd_momentum': float(params.evo_es_sgd_momentum),
         }
+        if moea in ('lw_dust', 'rlw_dust', 'hybrid_rlw_dust'):
+            evo_kwargs['inner_steps'] = [int(t) for t in params.evo_dust_inner_steps]
+        if moea == 'joint_dust':
+            evo_kwargs.update({'groups': list(params.evo_dust_groups) if params.evo_dust_groups else None,
+                               'antithetic': bool(params.evo_dust_antithetic),
+                               'balance': bool(params.evo_dust_balance),
+                               'balance_decay': float(params.evo_dust_balance_decay)})
+        if moea == 'hybrid_rlw_dust':
+            evo_kwargs['dust_fraction'] = float(params.evo_dust_fraction)
         if moea == 'cadust':
             evo_kwargs.update({'rank': int(params.evo_cadust_rank), 'decay': float(params.evo_cadust_decay),
                                'subspace_fraction': float(params.evo_cadust_subspace_fraction)})
         if moea == 'mo_upgrad_dust':
             evo_kwargs.update({'upgrad_norm_eps': float(params.upgrad_norm_eps),
                                'upgrad_reg_eps': float(params.upgrad_reg_eps)})
+        if moea == 'rfc':
+            evo_kwargs['frame_chunk'] = int(params.evo_rfc_frame_chunk)
         if moea == 'mo_mgda_dust':  # --evo_mgda_grad_norm, as LibMTL's MGDA mgda_gn
             evo_kwargs['grad_norm'] = str(params.evo_mgda_grad_norm).strip().lower()
     elif moea in ('sc_de', 'sc-de'):  # SC-DE: single-centre DE on the sum of losses

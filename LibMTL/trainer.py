@@ -217,7 +217,8 @@ class Trainer(nn.Module):
             wb_step = local_step + int(getattr(self, "_wandb_step_offset", 0))
 
         log: Dict[str, Any] = {}
-        log[f"{prefix}/epoch"] = float(local_step + 1)
+        # a global step (ES generation) is already the 1-based count; an epoch index is 0-based
+        log[f"{prefix}/epoch"] = float(local_step if global_step else local_step + 1)
         for tn, task in enumerate(self.task_name):
             log[f"{prefix}/{task}/loss"] = float(self.meter.loss_item[tn])
             metric_names = self.task_dict[task]["metrics"]

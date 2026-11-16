@@ -1,0 +1,43 @@
+# Existing 10-epoch sampled-data protocol: 2,344 iterations x 256 images.
+# Custom draws are specified in forward order; RDUST updates the sites in reverse.
+mode: train
+seed: 1
+gpu_id: "0"
+
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0  # No gradient-descent phase.
+
+evo_training: true
+evo_schedule: evolution
+evo_moea: rdust
+evo_iterations: 2344
+evo_num_batches: 1
+evo_eval_freq: 50  # Test at initialization 0, then generations 1, 50, 100, ... and the final generation.
+evo_seed: 1
+evo_es_lr: 0.001
+evo_es_optim: adam
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.05
+evo_dust_chunk: 8
+evo_dust_allocation: custom
+evo_dust_draws: [128, 128, 16, 16, 16]  # conv1, conv2, fc, top-left head, bottom-right head
+evo_es_grad_cos_freq: 0
+
+save_path: logs/multimnist/10epochs/rdust/custom-128_128_16_16_16/adam-lr_1e-3/seed_1/
+load_path: null
+wandb_enable: true
+wandb_entity: rasa_research
+wandb_project: evomtl-multimnist
+wandb_name: rdust-10epochs-custom-128_128_16_16_16-adam-lr_0.001-seed1
+wandb_group: rdust-10epochs-custom-128_128_16_16_16-adam-lr_0.001

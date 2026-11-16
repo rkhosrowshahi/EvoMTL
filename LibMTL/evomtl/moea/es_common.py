@@ -137,6 +137,15 @@ def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
     return float(a @ b / (a.norm() * b.norm()).clamp_min(1e-30))
 
 
+def require_shuffled_loader(train_dataloaders: Any, method: str) -> None:
+    """Raise unless the training loader shuffles: every call to ``trainer._sample_batches`` restarts it and takes its
+    first batch, so without shuffling a runner would train on the same mini-batch forever."""
+    sampler = getattr(train_dataloaders, "sampler", None)
+    if not (isinstance(sampler, torch.utils.data.RandomSampler) or getattr(sampler, "shuffle", False)):
+        raise ValueError(f"{method} draws every mini-batch from a restarted training loader; without shuffling it "
+                         "would get the same first batch every time. Use DataLoader(..., shuffle=True).")
+
+
 def true_jacobian(trainer: Any, theta: torch.Tensor, batches: list) -> torch.Tensor:
     """Backprop Jacobian ``[K, D]`` of the per-task losses w.r.t. the weights at ``theta``.
 

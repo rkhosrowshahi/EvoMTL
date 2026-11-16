@@ -29,8 +29,10 @@ def should_run_full_test(step_idx: int, n_steps: int, every: Any) -> bool:
     """Whether to run a full test pass this MOEA outer step.
 
     ``every <= 0`` disables in-loop test evaluation (train-snapshot logging only).
-    ``every >= 1`` runs test on steps ``0, every, 2*every, ...`` and always on the
-    last step ``n_steps - 1``. A set of step indices (from :func:`epoch_fraction_eval_steps`)
+    ``every >= 1`` runs test after the first generation, every ``every`` completed
+    generations, and the final generation: e.g. displayed generations ``1, 50, 100, ...``
+    when ``every=50``. Initialization (generation 0) is evaluated separately before training.
+    A set of step indices (from :func:`epoch_fraction_eval_steps`)
     runs test on exactly those steps and the last one.
     """
     if isinstance(every, (set, frozenset)):
@@ -42,7 +44,7 @@ def should_run_full_test(step_idx: int, n_steps: int, every: Any) -> bool:
         return False
     step_idx = int(step_idx)
     every = int(every)
-    return (step_idx % every == 0) or (step_idx == n_steps - 1)
+    return step_idx == 0 or ((step_idx + 1) % every == 0) or (step_idx == n_steps - 1)
 
 
 def epoch_fraction_eval_steps(n_steps: int, iters_per_epoch: int, per_epoch: int) -> frozenset:

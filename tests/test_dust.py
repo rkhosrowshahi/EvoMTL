@@ -110,6 +110,33 @@ class DUSTTests(unittest.TestCase):
             self.assertGreater(cos(J[k], J_true[k]), .95)
         self.assertEqual(tuple(losses.shape), (len(TASKS),))
 
+    def test_step_updates_once_using_the_mean_estimate(self):
+        x, y = batch()
+        batches = [(x[:6], {t: v[:6] for t, v in y.items()}), (x[6:], {t: v[6:] for t, v in y.items()})]
+        with contextlib.redirect_stdout(io.StringIO()):
+            trainer = make_trainer()
+            theta = trainer.theta_0.detach().clone()
+            initial = theta.clone()
+            args = (trainer, 24, .05, 4, 'equal', 0, .03)
+            baseline = DUST(*args, torch.Generator().manual_seed(7))
+            estimates, batch_losses = zip(*(baseline.estimate(*b) for b in batches))
+            baseline.close()
+            expected_true = torch.stack([true_jacobian(trainer, *b) for b in batches]).mean(0)
+
+            dust = DUST(*args, torch.Generator().manual_seed(7))
+            optimizer = torch.optim.SGD([theta], lr=.1)
+            J, losses, direction, weights, J_true = dust.step(batches, theta, optimizer, diagnose=True)
+            dust.close()
+
+        expected = torch.stack(estimates).mean(0)
+        torch.testing.assert_close(J, expected)
+        torch.testing.assert_close(losses, torch.stack(batch_losses).mean(0))
+        torch.testing.assert_close(direction, expected[0])
+        self.assertIsNone(weights)
+        torch.testing.assert_close(J_true, expected_true)
+        torch.testing.assert_close(theta, initial - .1 * expected[0])
+        torch.testing.assert_close(nn.utils.parameters_to_vector(trainer.model.parameters()), theta)
+
     def test_antithetic_pairs_negate_one_noise_draw(self):
         """A-DUST: each forward pass of a site (the batch repeated chunk = 4 times) holds 2 pairs, +sigma a on the first
         two copies and -sigma a of the same draw on the last two, at every call of the shared head."""
@@ -216,7 +243,7 @@ class DUSTTests(unittest.TestCase):
         self.assertEqual([evo['evo_kwargs'][k] for k in ('rank', 'decay', 'subspace_fraction')], [2, .8, .3])
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
             trainer = make_trainer(directory)
-            loader = DataLoader(Data(), batch_size=8)
+            loader = DataLoader(Data(), batch_size=8, shuffle=True)
             out = trainer._run_moea(evo['moea'].lower(), loader, None, evo['evo_kwargs'])
             with (Path(directory) / 'metrics.csv').open() as stream:
                 rows = list(csv.DictReader(stream))
@@ -307,6 +334,16 @@ class DUSTTests(unittest.TestCase):
             torch.testing.assert_close(theta, torch.as_tensor(out['pareto_center_X']))
             self.assertFalse(torch.equal(theta, trainer.theta_0))
             self.assertFalse(any(m._forward_hooks for m in trainer.model.modules()))  # hooks removed
+
+    def test_unshuffled_training_loader_is_rejected(self):
+        """Every generation restarts the loader: without shuffling, DUST and A-DUST would see one batch forever."""
+        for runner, method in ((run_dust, 'DUST'), (run_a_dust, 'A-DUST')):
+            with self.subTest(method), contextlib.redirect_stdout(io.StringIO()):
+                trainer = make_trainer()
+                with self.assertRaisesRegex(ValueError, f'^{method} .*shuffle=True'):
+                    runner(trainer, DataLoader(Data(), batch_size=8), num_iterations=1, pop_size=32, chunk=8)
+                self.assertTrue(torch.equal(torch.nn.utils.parameters_to_vector(trainer.model.parameters()),
+                                            trainer.theta_0))
 
 
 if __name__ == '__main__':

@@ -62,6 +62,7 @@ from .es_common import (
     make_es_optimizer,
     metrics_columns,
     report_search_mean,
+    require_shuffled_loader,
     true_jacobian,
 )
 
@@ -71,9 +72,11 @@ CONV_WEIGHT = {nn.Conv1d: torch.nn.grad.conv1d_weight, nn.Conv2d: torch.nn.grad.
 
 
 class DUST:
-    """The estimator: forward hooks on every site capture its input during the clean pass and add the current jitter
-    to its output during a draw (see the module docstring). :meth:`estimate` returns the gradient of the summed loss,
-    or with ``per_task`` one gradient per task loss."""
+    """Forward hooks capture each site's input during the clean pass and jitter its output during a draw.
+
+    :meth:`step` estimates gradients and updates the weights. :meth:`estimate` returns the gradient estimate of the
+    summed loss, or one estimate per task with ``per_task``.
+    """
 
     name = "DUST"
 
@@ -149,15 +152,25 @@ class DUST:
         covered = {id(p) for m in self.sites.values() for p in m.parameters(recurse=False)}
         self.free = [p for p in self.model.parameters() if id(p) not in covered]
         widths = {n: sum(math.prod(s[1:]) for s in self.shapes[n]) for n in self.sites}  # output size per sample
+        self.draws = self._allocate(widths, list(self.inputs))  # sites in the order the forward pass calls them
+        total = sum(self.draws.values())
+        print(f"[EvoMTL] {self.name}: {total} direct draws per generation"
+              + (f" ({total // 2} antithetic pairs)" if self.antithetic else "") + f" ({self.allocation}): "
+              + ", ".join(f"{n}={d}" for n, d in self.draws.items())
+              + (f" | weight-space ES on {sum(p.numel() for p in self.free)} other weights: {self.es_draws} pairs"
+                 if self.free else ""), flush=True)
+
+    def _allocate(self, widths: Dict[str, int], order: list) -> Dict[str, int]:
+        """Draws per unit (a site, or a group of sites jittered together) from its output size per sample
+        ``widths``; ``order`` is the forward order of the units, for ``"custom"``."""
         if self.allocation == "custom":
             if len(self.custom) != len(widths):
                 raise ValueError(f"DUST custom allocation: {len(self.custom)} draw counts for {len(widths)} sites "
                                  f"({', '.join(widths)}).")
-            order = list(self.inputs)  # sites in the order the forward pass calls them
-            self.draws = {n: dict(zip(order, self.custom))[n] for n in widths}
+            draws = {n: dict(zip(order, self.custom))[n] for n in widths}
         elif self.allocation == "log":  # CMA-ES population rule per site, rounded up to whole chunks
-            self.draws = {n: self.chunk * math.ceil(self.draw_scale * (4 + math.floor(3 * math.log(d))) / self.chunk)
-                          for n, d in widths.items()}
+            draws = {n: self.chunk * math.ceil(self.draw_scale * (4 + math.floor(3 * math.log(d))) / self.chunk)
+                     for n, d in widths.items()}
         else:  # one chunk per site, the other chunks in proportion to the share (largest remainder: pop_size draws)
             share = {n: (d if self.allocation == "width" else 1.0) for n, d in widths.items()}
             units = self.pop_size // self.chunk - len(share)
@@ -168,13 +181,8 @@ class DUST:
             extra = {n: int(q) for n, q in quota.items()}
             for n in sorted(quota, key=lambda n: quota[n] - extra[n], reverse=True)[:units - sum(extra.values())]:
                 extra[n] += 1
-            self.draws = {n: self.chunk * (1 + extra[n]) for n in share}
-        total = sum(self.draws.values())
-        print(f"[EvoMTL] {self.name}: {total} direct draws per generation"
-              + (f" ({total // 2} antithetic pairs)" if self.antithetic else "") + f" ({self.allocation}): "
-              + ", ".join(f"{n}={d}" for n, d in self.draws.items())
-              + (f" | weight-space ES on {sum(p.numel() for p in self.free)} other weights: {self.es_draws} pairs"
-                 if self.free else ""), flush=True)
+            return {n: self.chunk * (1 + extra[n]) for n in share}
+        return draws
 
     def _sample_noise(self, name: str, samples: int) -> list:
         return [torch.randn(samples, *s[1:], generator=self.gen, device=self.gen.device) for s in self.shapes[name]]
@@ -182,10 +190,8 @@ class DUST:
     def _finish_site(self, name: str, errors: list) -> list:
         return errors
 
-    @torch.no_grad()
-    def estimate(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Gradient estimates ``J`` (``[M, D]``, order of ``model.parameters()``) of the M objectives (mean over the
-        batch), and the task losses (``[K]``), on one mini-batch."""
+    def _capture(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """Refresh clean inputs, output shapes and per-sample task losses at the current weights."""
         self.model.eval()
         self.inputs, self.shapes, self.capturing = {}, {}, True
         try:
@@ -194,40 +200,90 @@ class DUST:
             self.capturing = False
         if self.draws is None:
             self._setup()
+        return task_losses
+
+    def _estimate_site(self, name: str, clean: torch.Tensor, x: torch.Tensor,
+                       y: Dict[str, torch.Tensor], grads: Dict[nn.Parameter, torch.Tensor]) -> None:
+        """Estimate one site's gradient, using a clean baseline and chunk-repeated data at the same weights."""
+        K, B = clean.shape
+        n = self.chunk
+        m = n // 2 if self.antithetic else n
+        draws = self.draws[name]
+        count = draws // 2 if self.antithetic else draws
+        errors = [torch.zeros(K, *s, device=clean.device) for s in self.shapes[name]]
+        for _ in range(draws // n):
+            noise = self._sample_noise(name, m * B)
+            # Pair k of sample b: +a at k*B+b and -a at (m+k)*B+b.
+            self.jitter = {name: [self.sigma * (torch.cat([a, -a]) if self.antithetic else a) for a in noise]}
+            try:
+                loss = (self.W @ self.losses(x, y)).view(K, n, B)
+            finally:
+                self.jitter = {}
+            if self.antithetic:
+                reward = (loss[:, m:] - loss[:, :m]) / 2
+            else:
+                reward = clean.unsqueeze(1) - loss
+                if n > 1:
+                    reward = reward - reward.mean(1, keepdim=True)
+            for e, a in zip(errors, noise):
+                e -= torch.einsum("knb,nb...->kb...", reward, a.view(m, B, *a.shape[1:])) / (self.sigma * count)
+        self._reassemble(self.sites[name], self._finish_site(name, errors), self.inputs[name], grads)
+
+    @torch.no_grad()
+    def estimate(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Gradient estimates ``J`` (``[M, D]``, order of ``model.parameters()``) of the M objectives (mean over the
+        batch), and the task losses (``[K]``), on one mini-batch."""
+        task_losses = self._capture(inputs, gts)
         clean = self.W @ task_losses  # [M, B]
         K, B = clean.shape  # K: number of objectives from here on
         n = self.chunk
-        m = n // 2 if self.antithetic else n  # noise draws per forward pass: n / 2 pairs (a, -a), or n draws
         x = inputs.repeat(n, *(1,) * (inputs.dim() - 1))
         y = {t: g.repeat(n, *(1,) * (g.dim() - 1)) for t, g in gts.items()}
 
         grads: Dict[nn.Parameter, torch.Tensor] = {}
-        for name, draws in self.draws.items():
-            shapes = self.shapes[name]
-            count = draws // 2 if self.antithetic else draws  # the average runs over the pairs, not the evaluations
-            errors = [torch.zeros(K, *s, device=clean.device) for s in shapes]
-            for _ in range(draws // n):
-                noise = self._sample_noise(name, m * B)
-                # antithetic: draw k of sample b at row k*B + b with +a, its pair at row (m + k)*B + b with -a
-                self.jitter = {name: [self.sigma * (torch.cat([a, -a]) if self.antithetic else a) for a in noise]}
-                try:
-                    loss = (self.W @ self.losses(x, y)).view(K, n, B)
-                finally:
-                    self.jitter = {}
-                if self.antithetic:  # r = (l(y - sigma a) - l(y + sigma a)) / 2 at each sample, no centering
-                    reward = (loss[:, m:] - loss[:, :m]) / 2
-                else:  # loss reduction at each sample, centered over the chunk
-                    reward = clean.unsqueeze(1) - loss
-                    if n > 1:
-                        reward = reward - reward.mean(1, keepdim=True)
-                for e, a in zip(errors, noise):
-                    e -= torch.einsum("knb,nb...->kb...", reward, a.view(m, B, *a.shape[1:])) / (self.sigma * count)
-            self._reassemble(self.sites[name], self._finish_site(name, errors), self.inputs[name], grads)
+        for name in self.draws:
+            self._estimate_site(name, clean, x, y, grads)
         if self.free:
             self._weight_space(inputs, gts, grads, K)
         J = torch.cat([grads[p].reshape(K, -1) if p in grads else torch.zeros(K, p.numel(), device=clean.device)
                        for p in self.model.parameters()], dim=1)
         return J / B, task_losses.mean(1)
+
+    @torch.no_grad()
+    def step(
+        self,
+        batches: list,
+        theta: torch.Tensor,
+        optimizer: torch.optim.Optimizer,
+        *,
+        aggregate: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None,
+        diagnose: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Estimate on fixed minibatches, update the flat weights ``theta`` once, and install them in the model.
+
+        The optimizer must own ``theta``. Returns the pre-update estimates, task losses, update direction, optional
+        task weights from ``aggregate``, and, with ``diagnose``, the pre-update backprop Jacobian.
+        """
+        if not batches:
+            raise ValueError("DUST needs at least one minibatch per step.")
+        if {id(p) for group in optimizer.param_groups for p in group['params']} != {id(theta)}:
+            raise ValueError("DUST's optimizer must own the flat weight tensor theta.")
+        if self.W.shape[0] > 1 and aggregate is None:
+            raise ValueError("DUST needs an aggregator for per-task gradient estimates.")
+
+        self.trainer.set_theta(theta.detach())
+        J = torch.zeros(self.W.shape[0], theta.numel())
+        losses = torch.zeros(len(self.trainer.task_name))
+        for inputs, gts in batches:
+            J_b, losses_b = self.estimate(inputs, gts)
+            J += J_b.cpu() / len(batches)
+            losses += losses_b.cpu() / len(batches)
+        direction, weights = aggregate(J, losses) if aggregate is not None else (J[0], None)
+        reference = true_jacobian(self.trainer, theta.detach(), batches) if diagnose else None
+        theta.grad = direction.to(theta, copy=True)
+        optimizer.step()
+        self.trainer.set_theta(theta.detach())
+        return J, losses, direction, weights, reference
 
     @staticmethod
     def _reassemble(m: nn.Module, errors: list, inputs: list, grads: Dict[nn.Parameter, torch.Tensor]) -> None:
@@ -250,30 +306,32 @@ class DUST:
                                                       m.groups) for e_k in e])
                 b = e.sum(dim=(1, *range(3, e.dim())))
             grads[m.weight] = grads.get(m.weight, 0) + w
-            if m.bias is not None:
-                grads[m.bias] = grads.get(m.bias, 0) + b
+            bias = getattr(m, "bias", None)
+            if bias is not None:
+                grads[bias] = grads.get(bias, 0) + b
 
     def _weight_space(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor],
-                      grads: Dict[nn.Parameter, torch.Tensor], K: int) -> None:
+                      grads: Dict[nn.Parameter, torch.Tensor], K: int, params: Optional[list] = None) -> None:
         """Two-sided weight-space ES on the parameters outside the sites, rewarded by each objective summed over the
         samples (divided by the batch size in :meth:`estimate`, like the site gradients)."""
-        clean = [p.detach().clone() for p in self.free]
-        est = [torch.zeros(K, *p.shape, device=p.device) for p in self.free]
+        params = self.free if params is None else params
+        clean = [p.detach().clone() for p in params]
+        est = [torch.zeros(K, *p.shape, device=p.device) for p in params]
         try:
             for _ in range(self.es_draws):
-                a = [torch.randn(p.shape, generator=self.gen, device=self.gen.device) for p in self.free]
+                a = [torch.randn(p.shape, generator=self.gen, device=self.gen.device) for p in params]
                 losses = []
                 for sign in (1.0, -1.0):
-                    for p, c, d in zip(self.free, clean, a):
+                    for p, c, d in zip(params, clean, a):
                         p.copy_(c + sign * self.es_sigma * d)
                     losses.append((self.W @ self.losses(inputs, gts)).sum(1))  # [K objectives]
                 g = (losses[0] - losses[1]) / (2 * self.es_sigma * self.es_draws)
                 for e, d in zip(est, a):
                     e += g.view(K, *(1,) * d.dim()) * d
         finally:
-            for p, c in zip(self.free, clean):
+            for p, c in zip(params, clean):
                 p.copy_(c)
-        for p, e in zip(self.free, est):
+        for p, e in zip(params, est):
             grads[p] = e
 
 
@@ -347,6 +405,7 @@ def run_dust(
         raise RuntimeError("prepare_evolution() first.")
     if int(chunk) < 1 or (allocation in ("equal", "width") and int(pop_size) < int(chunk)):
         raise ValueError(f"DUST needs 1 <= chunk <= pop_size, got chunk={chunk}, pop_size={pop_size}.")
+    require_shuffled_loader(train_dataloaders, method)
     configure_moea_random_seed(seed)
     gen = torch.Generator(trainer.device).manual_seed(int(seed))
     per_task = aggregate is not None
@@ -369,27 +428,19 @@ def run_dust(
             t0 = time.perf_counter()
             step = wandb_step_offset + iteration
             batches = trainer._sample_batches(train_dataloaders, num_batches)
-            trainer.set_theta(theta.detach())
-            J = torch.zeros(dust.W.shape[0], theta.numel())
-            losses = torch.zeros(len(tasks))
-            for inp, gts in batches:
-                J_b, L_b = dust.estimate(inp, gts)
-                J += J_b.cpu() / len(batches)
-                losses += L_b.cpu() / len(batches)
+            diagnose = grad_cos_freq > 0 and iteration % int(grad_cos_freq) == 0
+            J, losses, direction, w, J_true = dust.step(batches, theta, optimizer, aggregate=aggregate,
+                                                      diagnose=diagnose)
             F = losses.numpy()[None].astype(np.float32)  # [1, K]: the search mean before the update
             row: Dict[str, Any] = {"sigma": float(sigma)}
             if per_task:
-                direction, w = aggregate(J, losses)
                 row.update({f"weight_{t}": float(w[k]) for k, t in enumerate(tasks)})
-            else:
-                direction = J[0]
             extras_wandb: Dict[str, Any] = {"evo/dust/direction_norm": float(direction.norm())}
             progress = f"|d|={float(direction.norm()):.4g}"
             if per_task:
                 progress += " w=[" + ", ".join(f"{float(x):.3f}" for x in w) + "]"
                 extras_wandb.update({f"evo/dust/weight/{t}": float(w[k]) for k, t in enumerate(tasks)})
-            if grad_cos_freq > 0 and iteration % int(grad_cos_freq) == 0:
-                J_true = true_jacobian(trainer, theta.detach(), batches)
+            if diagnose:
                 dir_cos = _cosine(direction, aggregate(J_true, losses)[0] if per_task else J_true.sum(0))
                 if per_task:
                     true_cos = [_cosine(J[k], J_true[k]) for k in range(len(tasks))]
@@ -400,8 +451,6 @@ def run_dust(
                 row["true_cos_direction"] = dir_cos
                 extras_wandb["evo/dust/true_cos/direction"] = dir_cos
 
-            theta.grad = direction.clone()
-            optimizer.step()
             extras_wandb["evo/dust/mean_norm"] = float((theta.detach() - trainer.theta_0.cpu()).norm())
             elapsed = time.perf_counter() - t0
 

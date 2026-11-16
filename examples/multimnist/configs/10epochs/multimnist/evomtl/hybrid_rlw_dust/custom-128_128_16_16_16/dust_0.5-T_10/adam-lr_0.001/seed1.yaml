@@ -1,0 +1,46 @@
+# 10-epoch protocol: 2,344 mini-batches of 256 images. Hybrid-RLW-DUST trains with DUST (all layers together) for
+# the first 50% of the mini-batches (1,172 iterations), then with RLW-DUST, last layer to first, 10 steps per layer:
+# 23 iterations of 50 mini-batches (1,150; 22 unused). One Adam throughout. Per-step draws as dust/custom-128_128_16_16_16.
+mode: train
+seed: 1
+gpu_id: "0"
+
+weighting: EW
+arch: HPS
+rep_grad: false
+multi_input: false
+
+dataset: mnist
+dataset_path: .
+num_tasks: 2
+train_bs: 256
+test_bs: 10000
+epochs: 0  # No gradient-descent phase.
+
+evo_training: true
+evo_schedule: evolution
+evo_moea: hybrid_rlw_dust
+evo_iterations: 2344            # budget in mini-batches, shared by both phases
+evo_num_batches: 1
+evo_eval_freq: 50               # in mini-batches
+evo_seed: 1
+evo_es_lr: 0.001
+evo_es_optim: adam
+evo_es_adam_beta1: 0.9
+evo_es_adam_beta2: 0.999
+evo_es_adam_eps: 1.0e-8
+evo_es_sigma: 0.05
+evo_dust_chunk: 8
+evo_dust_allocation: custom
+evo_dust_draws: [128, 128, 16, 16, 16]  # conv1, conv2, fc, top-left head, bottom-right head
+evo_dust_fraction: 0.5          # share of the budget for DUST
+evo_dust_inner_steps: [10]      # T per layer; or one count per layer in forward order, e.g. [10, 10, 10, 10, 10]
+evo_es_grad_cos_freq: 0
+
+save_path: logs/multimnist/10epochs/hybrid_rlw_dust/custom-128_128_16_16_16/dust_0.5-T_10/adam-lr_1e-3/seed_1/
+load_path: null
+wandb_enable: true
+wandb_entity: rasa_research
+wandb_project: evomtl-multimnist
+wandb_name: hybrid_rlw_dust-10epochs-custom-128_128_16_16_16-dust_0.5-T_10-adam-lr_0.001-seed1
+wandb_group: hybrid_rlw_dust-10epochs-custom-128_128_16_16_16-dust_0.5-T_10-adam-lr_0.001

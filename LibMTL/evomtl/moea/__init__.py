@@ -10,6 +10,11 @@ from .dcpsl_es import run_dcpsl_es
 from .a_dust import run_a_dust
 from .cadust import run_cadust
 from .dust import run_dust
+from .joint_dust import run_joint_dust
+from .rdust import run_rdust
+from .lw_dust import run_lw_dust
+from .rlw_dust import run_rlw_dust
+from .hybrid_rlw_dust import run_hybrid_rlw_dust
 from .guidedes import run_guidedes
 from .hv import (
     marginal_hypervolume_weights,
@@ -35,6 +40,7 @@ from .mo_upgrad_guidedes import run_mo_upgrad_guidedes
 from .mo_mgda_dust import run_mo_mgda_dust
 from .mo_sum_dust import run_mo_sum_dust
 from .mo_upgrad_dust import run_mo_upgrad_dust
+from .rfc import run_rfc
 from .mo_upgrad_openes import run_mo_upgrad_openes
 from .mopso import run_mopso
 from .nsga2 import run_nsga2
@@ -67,6 +73,11 @@ __all__ = [
     "run_a_dust",
     "run_cadust",
     "run_dust",
+    "run_joint_dust",
+    "run_rdust",
+    "run_lw_dust",
+    "run_rlw_dust",
+    "run_hybrid_rlw_dust",
     "run_guidedes",
     "run_mo_cagrad_guidedes",
     "run_mo_cagrad_openes",
@@ -84,6 +95,7 @@ __all__ = [
     "run_mo_mgda_dust",
     "run_mo_sum_dust",
     "run_mo_upgrad_dust",
+    "run_rfc",
     "run_mo_upgrad_openes",
     "run_mopso",
     "run_nsga2",

@@ -48,11 +48,17 @@ from ..trainer import Trainer
 from .moea.common import epoch_fraction_eval_steps
 from .moea.comocma import run_comocma
 from .moea.a_dust import run_a_dust
+from .moea.joint_dust import run_joint_dust
 from .moea.cadust import run_cadust
 from .moea.dust import run_dust
+from .moea.rdust import run_rdust
+from .moea.lw_dust import run_lw_dust
+from .moea.rlw_dust import run_rlw_dust
+from .moea.hybrid_rlw_dust import run_hybrid_rlw_dust
 from .moea.mo_mgda_dust import run_mo_mgda_dust
 from .moea.mo_sum_dust import run_mo_sum_dust
 from .moea.mo_upgrad_dust import run_mo_upgrad_dust
+from .moea.rfc import run_rfc
 from .moea.hv import (
     marginal_hypervolume_weights,
     pareto_center_from_weights,
@@ -118,11 +124,17 @@ ES_RUNNERS = {
     "mo_camgda_openes": run_mo_camgda_openes,
     "mo_camgda_guidedes": run_mo_camgda_guidedes,
     "dust": run_dust,
+    "rdust": run_rdust,
+    "lw_dust": run_lw_dust,
+    "rlw_dust": run_rlw_dust,
+    "hybrid_rlw_dust": run_hybrid_rlw_dust,
     "a_dust": run_a_dust,
+    "joint_dust": run_joint_dust,
     "cadust": run_cadust,
     "mo_sum_dust": run_mo_sum_dust,
     "mo_upgrad_dust": run_mo_upgrad_dust,
     "mo_mgda_dust": run_mo_mgda_dust,
+    "rfc": run_rfc,
 }
 PSL_ES_KEYS = ("psl_es", "psl-es")
 TPSL_ES_KEYS = ("tpsl_es", "tpsl-es")
@@ -724,9 +736,10 @@ class EvoMTLTrainer(Trainer):
                 int(evo_kwargs.get("num_iterations", 0)), iters, per_epoch)
             print(f"[EvoMTL] Test evaluation {per_epoch}x per epoch (T={iters}): generations "
                   f"{sorted(s + 1 for s in evo_kwargs['evo_eval_freq'])} and the last.", flush=True)
-        post_evo_step = int(evo_kwargs["wandb_step_offset"]) + max(0, int(evo_kwargs.get("num_iterations", 0)))
-
         evo_out = self._run_moea(moea_key, train_dataloaders, test_dataloaders, evo_kwargs)
+        # runners whose W&B step is not one per iteration (LW-DUST: one per inner step) return their step count
+        post_evo_step = int(evo_kwargs["wandb_step_offset"]) + max(
+            0, int(evo_out.get("wandb_steps", evo_kwargs.get("num_iterations", 0))))
 
         if getattr(self, "_wandb_enabled", False):  # distance of the returned weights from theta_0
             dc = np.asarray(evo_out["pareto_center_X"], dtype=np.float32).reshape(-1) \
