@@ -352,8 +352,8 @@ class DUSTTests(unittest.TestCase):
             self.assertEqual(out['method'], method)
             line = next(l for l in log.getvalue().splitlines() if 'direct draws per generation' in l)
             self.assertIn('32 direct draws per generation (custom): ', line)
-            for site in ('encoder.0=16', 'encoder.3=8', 'decoders.a=4', 'decoders.b=4'):
-                self.assertIn(site, line)
+            for layer in ('encoder.0=16', 'encoder.3=8', 'decoders.a=4', 'decoders.b=4'):
+                self.assertIn(layer, line)
             self.assertEqual(len(rows), 2)
             self.assertTrue(all(rows[-1][f'weight_{t}'] and rows[-1][f'true_cos_{t}'] for t in TASKS))
 
