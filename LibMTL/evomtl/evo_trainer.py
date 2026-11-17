@@ -58,6 +58,7 @@ from .moea.hybrid_rlw_dust import run_hybrid_rlw_dust
 from .moea.mo_mgda_dust import run_mo_mgda_dust
 from .moea.mo_sum_dust import run_mo_sum_dust
 from .moea.mo_upgrad_dust import run_mo_upgrad_dust
+from .moea.mo_split_dust import run_mo_split_dust
 from .moea.rfc import run_rfc
 from .moea.hv import (
     marginal_hypervolume_weights,
@@ -134,6 +135,7 @@ ES_RUNNERS = {
     "mo_sum_dust": run_mo_sum_dust,
     "mo_upgrad_dust": run_mo_upgrad_dust,
     "mo_mgda_dust": run_mo_mgda_dust,
+    "mo_split_dust": run_mo_split_dust,
     "rfc": run_rfc,
 }
 PSL_ES_KEYS = ("psl_es", "psl-es")

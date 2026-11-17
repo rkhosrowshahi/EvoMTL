@@ -187,7 +187,10 @@ _parser.add_argument(
          'or mo_sum_dust '
          '(MO-Sum-DUST: one DUST estimate per task loss, summed; same flags), mo_upgrad_dust (MO-UPGrad-DUST: the '
          'per-task estimates combined by UPGrad; also --upgrad_*) or mo_mgda_dust (MO-MGDA-DUST: combined by '
-         'LibMTL MGDA; --evo_mgda_grad_norm none / loss / l2 / loss+ normalizes them first), or rfc (RFC: '
+         'LibMTL MGDA; --evo_mgda_grad_norm none / loss / l2 / loss+ normalizes them first), or mo_split_dust '
+         '(MO-UPGrad-Split-DUST / MO-MGDA-Split-DUST: per-layer task weights from smoothed cross-chunk Gramians of '
+         'the per-task estimates; --evo_split_solver, --evo_split_gram_decay, --upgrad_*; with --evo_dust_antithetic: '
+         'antithetic pairs, MO-UPGrad-Split-ADUST), or rfc (RFC: '
          'readout-frame credit, exact coordinate differences of the loss at the shared representation and the '
          'decoder outputs (decoder-only reruns), independent encoder draws scored by the linearized readout; DUST '
          'flags, --evo_pop_size counts encoder passes; --evo_rfc_frame_chunk)',
@@ -367,7 +370,8 @@ _parser.add_argument('--evo_dust_groups', type=int, nargs='*', default=None,
                          '(--evo_pop_size, --evo_dust_allocation, --evo_dust_draws) are then per group')
 _parser.add_argument('--evo_dust_antithetic', action='store_true', default=False,
                     help='Joint-DUST: antithetic draws, the jitter of every layer of a group flipped together '
-                         '(Joint-A-DUST; --evo_dust_chunk even)')
+                         '(Joint-A-DUST); MO-Split-DUST: antithetic pairs rewarded by half their loss difference '
+                         '(MO-UPGrad-Split-ADUST); --evo_dust_chunk even')
 _parser.add_argument('--evo_dust_balance', action='store_true', default=False,
                     help='Joint-DUST: per-layer jitter scales that make every layer of a group move the loss equally, '
                          'from forward-only split-half estimates of each layer\'s gradient energy; the layer with the '
@@ -456,6 +460,10 @@ _parser.add_argument('--evo_mgda_grad_norm', type=str, default='none', choices=(
                     help='MO-MGDA-OpenES / MO-MGDA-DUST: divide each pseudo-gradient by its loss (loss), norm (l2) or both (loss+) before the '
                          'direction is computed, as LibMTL MGDA mgda_gn; none = raw; loss2 (LN2) = loss with the '
                          'step weights normalized to sum to one (MO-MGDA-OpenES only)')
+_parser.add_argument('--evo_split_solver', type=str, default='upgrad', choices=('upgrad', 'mgda'),
+                    help='MO-Split-DUST: solver of the per-layer task weights (upgrad or mgda)')
+_parser.add_argument('--evo_split_gram_decay', type=float, default=0.9,
+                    help='MO-Split-DUST: EMA factor of the per-layer cross-chunk Gramians over iterations (0 = none)')
 _parser.add_argument('--evo_mgda_kappa', type=float, default=1.0,
                     help='MO-MGDA-OpenES (robust): conservativeness kappa, weight of the pseudo-gradient uncertainty')
 _parser.add_argument('--evo_mgda_lambda', type=float, default=1.0,
@@ -968,7 +976,7 @@ def _make_evo_args(params):
                 'guided_sigma': float(params.evo_es_guided_sigma),
                 'guided_ema': float(params.evo_es_guided_ema),
             })
-    elif moea in ('dust', 'rdust', 'lw_dust', 'rlw_dust', 'hybrid_rlw_dust', 'a_dust', 'joint_dust', 'cadust', 'mo_sum_dust', 'mo_upgrad_dust', 'mo_mgda_dust', 'rfc'):
+    elif moea in ('dust', 'rdust', 'lw_dust', 'rlw_dust', 'hybrid_rlw_dust', 'a_dust', 'joint_dust', 'cadust', 'mo_sum_dust', 'mo_upgrad_dust', 'mo_mgda_dust', 'mo_split_dust', 'rfc'):
         evo_kwargs = {
             'num_iterations': params.evo_iterations,
             'pop_size': params.evo_pop_size,
@@ -1005,6 +1013,12 @@ def _make_evo_args(params):
                                'subspace_fraction': float(params.evo_cadust_subspace_fraction)})
         if moea == 'mo_upgrad_dust':
             evo_kwargs.update({'upgrad_norm_eps': float(params.upgrad_norm_eps),
+                               'upgrad_reg_eps': float(params.upgrad_reg_eps)})
+        if moea == 'mo_split_dust':
+            evo_kwargs.update({'solver': str(params.evo_split_solver).strip().lower(),
+                               'gram_decay': float(params.evo_split_gram_decay),
+                               'antithetic': bool(params.evo_dust_antithetic),
+                               'upgrad_norm_eps': float(params.upgrad_norm_eps),
                                'upgrad_reg_eps': float(params.upgrad_reg_eps)})
         if moea == 'rfc':
             evo_kwargs['frame_chunk'] = int(params.evo_rfc_frame_chunk)

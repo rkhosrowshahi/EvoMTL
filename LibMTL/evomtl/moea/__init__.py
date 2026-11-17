@@ -40,6 +40,7 @@ from .mo_upgrad_guidedes import run_mo_upgrad_guidedes
 from .mo_mgda_dust import run_mo_mgda_dust
 from .mo_sum_dust import run_mo_sum_dust
 from .mo_upgrad_dust import run_mo_upgrad_dust
+from .mo_split_dust import run_mo_split_dust
 from .rfc import run_rfc
 from .mo_upgrad_openes import run_mo_upgrad_openes
 from .mopso import run_mopso
@@ -95,6 +96,7 @@ __all__ = [
     "run_mo_mgda_dust",
     "run_mo_sum_dust",
     "run_mo_upgrad_dust",
+    "run_mo_split_dust",
     "run_rfc",
     "run_mo_upgrad_openes",
     "run_mopso",
