@@ -335,6 +335,28 @@ class DUSTTests(unittest.TestCase):
             self.assertFalse(torch.equal(theta, trainer.theta_0))
             self.assertFalse(any(m._forward_hooks for m in trainer.model.modules()))  # hooks removed
 
+    def test_multi_objective_runners_use_the_custom_allocation(self):
+        """MO-UPGrad-DUST and MO-MGDA-Loss-DUST split their draws by the per-layer counts of ``draws`` (pop_size
+        unused) and still log per-task weights."""
+        runners = ((run_mo_upgrad_dust, {}, 'MO-UPGrad-DUST'),
+                   (run_mo_mgda_dust, {'grad_norm': 'loss'}, 'MO-MGDA-Loss-DUST'))
+        for runner, extra, method in runners:
+            log = io.StringIO()
+            with self.subTest(method), tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(log):
+                trainer = make_trainer(directory, shared=False)  # forward order: conv, linear, head a, head b
+                loader = DataLoader(Data(), batch_size=8, shuffle=True)
+                out = runner(trainer, loader, num_iterations=2, pop_size=0, sigma=.05, chunk=4, lr=.01,
+                             allocation='custom', draws=[16, 8, 4, 4], evo_eval_freq=0, grad_cos_freq=1, **extra)
+                with (Path(directory) / 'metrics.csv').open() as stream:
+                    rows = list(csv.DictReader(stream))
+            self.assertEqual(out['method'], method)
+            line = next(l for l in log.getvalue().splitlines() if 'direct draws per generation' in l)
+            self.assertIn('32 direct draws per generation (custom): ', line)
+            for site in ('encoder.0=16', 'encoder.3=8', 'decoders.a=4', 'decoders.b=4'):
+                self.assertIn(site, line)
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(rows[-1][f'weight_{t}'] and rows[-1][f'true_cos_{t}'] for t in TASKS))
+
     def test_unshuffled_training_loader_is_rejected(self):
         """Every generation restarts the loader: without shuffling, DUST and A-DUST would see one batch forever."""
         for runner, method in ((run_dust, 'DUST'), (run_a_dust, 'A-DUST')):
