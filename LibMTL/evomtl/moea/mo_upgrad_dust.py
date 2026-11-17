@@ -1,6 +1,6 @@
 """Multi-objective DUST with UPGrad aggregation of the per-task gradient estimates (MO-UPGrad-DUST).
 
-DUST (:mod:`.dust`) with every task loss rewarded separately: each site gets one output error and one weight-gradient
+DUST (:mod:`.dust`) with every task loss rewarded separately: each layer gets one output error and one weight-gradient
 estimate per task, the rows ``g_k`` of ``J`` (``[K, D]``). They are combined with UPGrad (Quinton & Rey 2024), as
 MO-UPGrad-OpenES combines its pseudo-gradients (:func:`~.es_common.upgrad_aggregate`, LibMTL's UPGrad): every row is
 projected onto the dual cone of the rows and the projections are averaged, so the direction ``d`` never conflicts

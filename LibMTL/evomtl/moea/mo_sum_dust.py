@@ -1,13 +1,13 @@
 """Multi-objective DUST with the sum of the per-task gradient estimates (MO-Sum-DUST).
 
 DUST (:mod:`.dust`) estimates the gradient of one loss, the sum of the task losses: every jitter is rewarded by the
-reduction of that sum at its sample. MO-Sum-DUST rewards every task loss separately, so each site gets one output
+reduction of that sum at its sample. MO-Sum-DUST rewards every task loss separately, so each layer gets one output
 error and one weight-gradient estimate per task, the rows ``g_k`` of ``J`` (``[K, D]``), and the weights step along
 their sum ``d = sum_k g_k``.
 
 With the same noise the two directions agree up to rounding: the chunk centering, the reward-weighted noise and the
 local linear maps are all linear in the rewards, so summing the task losses before the estimate (DUST) equals summing
-the per-task estimates after it. MO-Sum-DUST keeps K errors per site instead of one, and its per-task rows can be
+the per-task estimates after it. MO-Sum-DUST keeps K errors per layer instead of one, and its per-task rows can be
 compared with the per-task backprop gradients.
 
 References:

@@ -1,5 +1,5 @@
 # Existing 10-epoch sampled-data protocol: 2,344 iterations x 256 images.
-# Custom draws are specified in forward order; RDUST updates the sites in reverse.
+# Custom draws are specified in forward order; RDUST updates the layers in reverse.
 mode: train
 seed: 1
 gpu_id: "0"

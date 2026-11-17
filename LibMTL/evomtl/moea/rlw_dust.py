@@ -3,7 +3,7 @@
 LW-DUST (:mod:`.lw_dust`) in the opposite order: one iteration visits the parameter groups from the last layer the
 forward pass calls (the task heads) to the first, and gives group ``l`` its ``T_l`` inner steps before moving to the
 layer before it. Each inner step is LW-DUST's: fresh mini-batches, a clean forward, the group's DUST estimate (output
-jitter and the exact local linear map for a site, weight-space ES otherwise) and one optimizer step on that group.
+jitter and the exact local linear map for a layer, weight-space ES otherwise) and one optimizer step on that group.
 
 The layers after ``l`` were just trained, so its jitter rewards are measured through the updated downstream network.
 The layers before ``l`` have not moved yet in this iteration, so the layers after ``l`` were trained on the input

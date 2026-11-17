@@ -21,7 +21,7 @@ def main():
         for path in sorted(folder.glob('checkpoint_*.pt'),key=lambda p:int(p.stem.split('_')[-1])):
             state=torch.load(path,map_location=self.device,weights_only=False)
             self.model.load_state_dict(state['model']);self.model.eval()
-            sites={n:m for n,m in self.model.named_modules() if isinstance(m,(torch.nn.Conv2d,torch.nn.Linear))}
+            layers={n:m for n,m in self.model.named_modules() if isinstance(m,(torch.nn.Conv2d,torch.nn.Linear))}
             row={'generation':state['generation'],'layers':{}}
             def hook(name):
                 def collect(m,args,output):
@@ -30,7 +30,7 @@ def main():
                         'weight_norm':float(m.weight.norm()),'bias_norm':float(m.bias.norm()),
                         'output_nonpositive_fraction':float((output<=0).float().mean())}
                 return collect
-            handles=[m.register_forward_hook(hook(n)) for n,m in sites.items()]
+            handles=[m.register_forward_hook(hook(n)) for n,m in layers.items()]
             with torch.no_grad():self.model(x)
             for h in handles:h.remove()
             results.append(row)

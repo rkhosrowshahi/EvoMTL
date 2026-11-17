@@ -1,10 +1,10 @@
-"""Antithetic DUST (A-DUST): DUST with antithetic jitter pairs on the site outputs.
+"""Antithetic DUST (A-DUST): DUST with antithetic jitter pairs on the layer outputs.
 
-DUST (:mod:`.dust`) jitters one site's output ``y`` with independent draws ``y + sigma a_n`` and rewards each draw
+DUST (:mod:`.dust`) jitters one layer's output ``y`` with independent draws ``y + sigma a_n`` and rewards each draw
 with the loss reduction at its sample, centered over the ``chunk`` draws of one forward pass. A-DUST draws ``K`` noise
-tensors ``a_k ~ N(0, I)`` per site and evaluates each twice, ``y + sigma a_k`` and ``y - sigma a_k``: same sample,
+tensors ``a_k ~ N(0, I)`` per layer and evaluates each twice, ``y + sigma a_k`` and ``y - sigma a_k``: same sample,
 same targets, same weights, eval mode in both, only the sign of the jitter differs. With the per-sample losses
-``l+[k, b]`` and ``l-[k, b]`` of the pair, the reward and the error at the site's output are
+``l+[k, b]`` and ``l-[k, b]`` of the pair, the reward and the error at the layer's output are
 
     r[k, b] = (l-[k, b] - l+[k, b]) / 2
     e[b]    = -1 / (K sigma) sum_k r[k, b] a_k[b]  =  1 / (2 K sigma) sum_k (l+[k, b] - l-[k, b]) a_k[b]  ~ dL[b] / dy[b]
@@ -15,12 +15,12 @@ loss around ``y`` (the curvature term ``sigma^2 a^T H a / 2`` among them), so th
 ``O(sigma^2)`` without a baseline; DUST's chunk mean removes the clean loss but shrinks the estimate by
 ``1 - 1 / chunk``. Everything after the error is DUST's: the exact local linear map of ``e`` and the cached input
 (``sum_b e[b] x[b]^T`` and ``sum_b e[b]`` for a Linear layer, the correlation for a convolution, a scatter-add for an
-embedding; divided by the batch size), the two-sided weight-space ES on the parameters outside the sites
+embedding; divided by the batch size), the two-sided weight-space ES on the parameters outside the weight layers
 (normalization affines, free scalars; already antithetic) and the optimizer step on ``theta``. A-DUST is
 single-objective: the rewards come from the summed task loss.
 
 Cost. The draw counts (``pop_size``, ``allocation``, ``draws``) still count forward evaluations of the batch, so a
-site with ``d`` draws gets ``d / 2`` pairs and A-DUST costs what DUST costs at the same settings. One forward pass of
+layer with ``d`` draws gets ``d / 2`` pairs and A-DUST costs what DUST costs at the same settings. One forward pass of
 the batch repeated ``chunk`` times holds ``chunk / 2`` pairs (``chunk`` even): the first half of the copies gets
 ``+sigma a_k``, the second half ``-sigma a_k``. The samples of an eval-mode forward do not interact, so the two
 members of a pair see the same conditions.

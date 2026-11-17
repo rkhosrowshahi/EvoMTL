@@ -8,8 +8,8 @@ with DUST and switches to RLW-DUST for the remaining, fine-grained training.
 
 The budget is ``num_iterations`` mini-batches (the DUST generations of the same run length):
 
-1. the first ``round(dust_fraction * num_iterations)`` iterations are DUST's: one mini-batch, every site's jitter
-   estimate (and the weight-space ES on the parameters outside the sites) at one snapshot, one optimizer step on all
+1. the first ``round(dust_fraction * num_iterations)`` iterations are DUST's: one mini-batch, every layer's jitter
+   estimate (and the weight-space ES on the parameters outside the weight layers) at one snapshot, one optimizer step on all
    parameters;
 2. the rest of the budget goes to RLW-DUST iterations, as many whole ones as fit: one iteration takes ``sum_l T_l``
    mini-batches, one inner step each, from the last group to the first. A leftover smaller than one iteration is
@@ -89,7 +89,7 @@ def run_hybrid_rlw_dust(
     inner_steps : list of int, optional
         RLW-DUST's ``T_l``: one count for every group, or one per group in forward order. Default ``[10]``.
     pop_size, allocation, draw_scale, draws, sigma, chunk, es_draws, es_sigma
-        DUST's per-site jitter draws and weight-space ES (:func:`~.dust.run_dust`), in both phases.
+        DUST's per-layer jitter draws and weight-space ES (:func:`~.dust.run_dust`), in both phases.
     lr, optim, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps, sgd_momentum
         One optimizer on the model's parameters for both phases (:func:`~.es_common.make_es_optimizer`).
     evo_eval_freq : int or set
@@ -126,7 +126,7 @@ def run_hybrid_rlw_dust(
         offsets[p], start = slice(start, start + p.numel()), start + p.numel()
 
     batches = trainer._sample_batches(train_dataloaders, num_batches)
-    dust._capture(*batches[0])  # finds the sites, the groups and the draws
+    dust._capture(*batches[0])  # finds the layers, the groups and the draws
     per_iteration = sum(dust.steps.values())
     joint = round(float(dust_fraction) * int(num_iterations))
     layerwise = (int(num_iterations) - joint) // per_iteration if per_iteration else 0

@@ -39,7 +39,7 @@ class RDUST:
     """Activation perturbations and immediate reverse-order parameter updates.
 
     Groups follow the first completed call of each owning module in a clean forward.
-    Repeated calls to one module form one site. Distinct modules with tied parameters
+    Repeated calls to one module form one layer. Distinct modules with tied parameters
     cannot receive independent updates and are rejected before an iteration starts.
     ``estimate`` provides fixed-snapshot estimates. Training uses ``step``.
     """
@@ -63,7 +63,7 @@ class RDUST:
         self.draw_scale = float(draw_scale)
         self.custom = [int(n) for n in draws] if draws else None
         if allocation == "custom" and (not self.custom or any(n < self.chunk or n % self.chunk for n in self.custom)):
-            raise ValueError(f"RDUST custom allocation needs draws per site in multiples of chunk={self.chunk}, "
+            raise ValueError(f"RDUST custom allocation needs draws per layer in multiples of chunk={self.chunk}, "
                              f"got {draws}.")
         self.es_draws, self.es_sigma = int(es_draws), float(es_sigma)
         # The objective is the summed task loss at each sample.
@@ -78,14 +78,14 @@ class RDUST:
                                  "reduction.")
             self.sample_loss[task] = copy.copy(fn)
             self.sample_loss[task].reduction = "none"
-        # candidate sites; those never called by the forward are dropped at the first clean pass
-        self.sites = {n: m for n, m in self.model.named_modules()
+        # candidate layers; those never called by the forward are dropped at the first clean pass
+        self.layers = {n: m for n, m in self.model.named_modules()
                       if isinstance(m, (nn.Linear, nn.Embedding))
                       or (type(m) in CONV_WEIGHT and m.padding_mode == "zeros" and not isinstance(m.padding, str))}
-        self.hooks = [m.register_forward_hook(self._hook(n)) for n, m in self.sites.items()]
-        self.inputs: Dict[str, list] = {}   # site -> input of every call (clean pass)
-        self.shapes: Dict[str, list] = {}   # site -> output shape of every call (clean pass)
-        self.jitter: Dict[str, list] = {}   # site -> jitter added to the output of every call (current draw)
+        self.hooks = [m.register_forward_hook(self._hook(n)) for n, m in self.layers.items()]
+        self.inputs: Dict[str, list] = {}   # layer -> input of every call (clean pass)
+        self.shapes: Dict[str, list] = {}   # layer -> output shape of every call (clean pass)
+        self.jitter: Dict[str, list] = {}   # layer -> jitter added to the output of every call (current draw)
         self.calls: Dict[str, int] = {}
         self.capturing = False
         self.draws: Optional[Dict[str, int]] = None
@@ -126,33 +126,33 @@ class RDUST:
         return torch.stack([r.reshape(len(r), -1).mean(1) for r in rows])
 
     def _setup(self) -> None:
-        # Check every direct owner before filtering free parameters: a site can also share its weight
-        # with a non-site module. Reject before setting draws, so a failed setup cannot be reused partially.
+        # Check every direct owner before filtering free parameters: a layer can also share its weight
+        # with a non-layer module. Reject before setting draws, so a failed setup cannot be reused partially.
         owners = {}
         for name, module in self.model.named_modules():
             for p in module.parameters(recurse=False):
                 if id(p) in owners:
                     raise ValueError(f"RDUST does not support tied parameters across distinct modules "
-                                     f"({owners[id(p)]!r}, {name!r}); reuse one module for a shared site.")
+                                     f"({owners[id(p)]!r}, {name!r}); reuse one module for a shared layer.")
                 owners[id(p)] = name
-        self.sites = {n: m for n, m in self.sites.items() if n in self.inputs}
-        covered = {id(p) for m in self.sites.values() for p in m.parameters(recurse=False)}
+        self.layers = {n: m for n, m in self.layers.items() if n in self.inputs}
+        covered = {id(p) for m in self.layers.values() for p in m.parameters(recurse=False)}
         self.free = [p for p in self.model.parameters() if id(p) not in covered]
-        widths = {n: sum(math.prod(s[1:]) for s in self.shapes[n]) for n in self.sites}  # output size per sample
+        widths = {n: sum(math.prod(s[1:]) for s in self.shapes[n]) for n in self.layers}  # output size per sample
         if self.allocation == "custom":
             if len(self.custom) != len(widths):
-                raise ValueError(f"RDUST custom allocation: {len(self.custom)} draw counts for {len(widths)} sites "
+                raise ValueError(f"RDUST custom allocation: {len(self.custom)} draw counts for {len(widths)} layers "
                                  f"({', '.join(widths)}).")
-            order = list(self.inputs)  # sites in the order the forward pass calls them
+            order = list(self.inputs)  # layers in the order the forward pass calls them
             self.draws = {n: dict(zip(order, self.custom))[n] for n in widths}
-        elif self.allocation == "log":  # CMA-ES population rule per site, rounded up to whole chunks
+        elif self.allocation == "log":  # CMA-ES population rule per layer, rounded up to whole chunks
             self.draws = {n: self.chunk * math.ceil(self.draw_scale * (4 + math.floor(3 * math.log(d))) / self.chunk)
                           for n, d in widths.items()}
-        else:  # one chunk per site, the other chunks in proportion to the share (largest remainder: pop_size draws)
+        else:  # one chunk per layer, the other chunks in proportion to the share (largest remainder: pop_size draws)
             share = {n: (d if self.allocation == "width" else 1.0) for n, d in widths.items()}
             units = self.pop_size // self.chunk - len(share)
             if units < 0:
-                raise ValueError(f"RDUST needs pop_size >= chunk * sites = {self.chunk * len(share)}, "
+                raise ValueError(f"RDUST needs pop_size >= chunk * layers = {self.chunk * len(share)}, "
                                  f"got {self.pop_size}.")
             quota = {n: units * s / sum(share.values()) for n, s in share.items()}
             extra = {n: int(q) for n, q in quota.items()}
@@ -169,7 +169,7 @@ class RDUST:
         free = {id(p) for p in self.free}
         candidates = {}
         for name, module in self.model.named_modules():
-            params = tuple(p for p in module.parameters(recurse=False) if name in self.sites or id(p) in free)
+            params = tuple(p for p in module.parameters(recurse=False) if name in self.layers or id(p) in free)
             if not params:
                 continue
             candidates[name] = params
@@ -181,7 +181,7 @@ class RDUST:
     def _sample_noise(self, name: str, samples: int) -> list:
         return [torch.randn(samples, *s[1:], generator=self.gen, device=self.gen.device) for s in self.shapes[name]]
 
-    def _finish_site(self, name: str, errors: list) -> list:
+    def _finish_layer(self, name: str, errors: list) -> list:
         return errors
 
     def _capture(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -197,9 +197,9 @@ class RDUST:
             self._setup()
         return task_losses
 
-    def _estimate_site(self, name: str, clean: torch.Tensor, x: torch.Tensor,
+    def _estimate_layer(self, name: str, clean: torch.Tensor, x: torch.Tensor,
                        y: Dict[str, torch.Tensor], grads: Dict[nn.Parameter, torch.Tensor]) -> None:
-        """Estimate one site's gradient, using a clean baseline and chunk-repeated data at the same weights."""
+        """Estimate one layer's gradient, using a clean baseline and chunk-repeated data at the same weights."""
         K, B = clean.shape
         n = self.chunk
         m = n // 2 if self.antithetic else n
@@ -222,7 +222,7 @@ class RDUST:
                     reward = reward - reward.mean(1, keepdim=True)
             for e, a in zip(errors, noise):
                 e -= torch.einsum("knb,nb...->kb...", reward, a.view(m, B, *a.shape[1:])) / (self.sigma * count)
-        self._reassemble(self.sites[name], self._finish_site(name, errors), self.inputs[name], grads)
+        self._reassemble(self.layers[name], self._finish_layer(name, errors), self.inputs[name], grads)
 
     @torch.no_grad()
     def estimate(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -237,7 +237,7 @@ class RDUST:
 
         grads: Dict[nn.Parameter, torch.Tensor] = {}
         for name in self.draws:
-            self._estimate_site(name, clean, x, y, grads)
+            self._estimate_layer(name, clean, x, y, grads)
         if self.free:
             self._weight_space(inputs, gts, grads, K)
         J = torch.cat([grads[p].reshape(K, -1) if p in grads else torch.zeros(K, p.numel(), device=clean.device)
@@ -246,7 +246,7 @@ class RDUST:
 
     @staticmethod
     def _reassemble(m: nn.Module, errors: list, inputs: list, grads: Dict[nn.Parameter, torch.Tensor]) -> None:
-        """Exact local linear map of the site ``m``: its weight (and bias) gradients from the output errors ``e``
+        """Exact local linear map of the layer ``m``: its weight (and bias) gradients from the output errors ``e``
         (``[K, B, ...]``) and inputs of every call, added to ``grads``."""
         for e, x in zip(errors, inputs):
             K = e.shape[0]
@@ -271,8 +271,8 @@ class RDUST:
 
     def _weight_space(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor],
                       grads: Dict[nn.Parameter, torch.Tensor], K: int, params: Optional[list] = None) -> None:
-        """Two-sided weight-space ES on the parameters outside the sites, rewarded by each objective summed over the
-        samples (divided by the batch size in :meth:`estimate`, like the site gradients)."""
+        """Two-sided weight-space ES on the parameters outside the weight layers, rewarded by each objective summed over the
+        samples (divided by the batch size in :meth:`estimate`, like the layer gradients)."""
         params = self.free if params is None else params
         clean = [p.detach().clone() for p in params]
         est = [torch.zeros(K, *p.shape, device=p.device) for p in params]
@@ -330,11 +330,11 @@ class RDUST:
                     if group_index == 0:
                         losses += task_losses.mean(1).cpu() / len(batches)
                     grads: Dict[nn.Parameter, torch.Tensor] = {}
-                    if name in self.sites:
+                    if name in self.layers:
                         n = self.chunk
                         x = inputs.repeat(n, *(1,) * (inputs.dim() - 1))
                         y = {t: g.repeat(n, *(1,) * (g.dim() - 1)) for t, g in gts.items()}
-                        self._estimate_site(name, self.W @ task_losses, x, y, grads)
+                        self._estimate_layer(name, self.W @ task_losses, x, y, grads)
                     else:
                         self._weight_space(inputs, gts, grads, 1, params=list(active))
                     for p in active:

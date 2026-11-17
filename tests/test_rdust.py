@@ -182,7 +182,7 @@ class RDUSTTests(unittest.TestCase):
                 if name != 'sgd':
                     self.assertEqual([int(optimizer.state[p]['step']) for p in params], [3, 3])
 
-    def test_one_site_uses_unchanged_dust_estimator(self):
+    def test_one_layer_uses_unchanged_dust_estimator(self):
         trainer = ScalarTrainer(single=True)
         with contextlib.redirect_stdout(io.StringIO()):
             baseline = estimator(trainer, DUST)
@@ -218,7 +218,7 @@ class RDUSTTests(unittest.TestCase):
         torch.testing.assert_close(J, expected, rtol=3e-5, atol=3e-6)
         torch.testing.assert_close(losses, initial)
 
-    def test_shared_site_and_free_normalization_form_separate_groups(self):
+    def test_shared_layer_and_free_normalization_form_separate_groups(self):
         with contextlib.redirect_stdout(io.StringIO()):
             trainer = make_trainer(norm=True)
             dust = RDUST(trainer, 24, .05, 4, 'equal', 4, .03, torch.Generator().manual_seed(4))
@@ -263,7 +263,7 @@ class RDUSTTests(unittest.TestCase):
         torch.testing.assert_close(theta, torch.as_tensor(result['pareto_center_X']))
         self.assertFalse(any(module._forward_hooks for module in trainer.model.modules()))
 
-    def test_distinct_sites_with_tied_weights_fail_before_updating(self):
+    def test_distinct_layers_with_tied_weights_fail_before_updating(self):
         trainer = ScalarTrainer()
         trainer.model.output.weight = trainer.model.input.weight
         initial = trainer.model.input.weight.detach().clone()
@@ -297,7 +297,7 @@ class RDUSTTests(unittest.TestCase):
             torch.testing.assert_close(actual, target, rtol=3e-5, atol=3e-6)
         self.assertEqual(float(trainer.model.input.weight[2, 0].detach()), 0.)
 
-    def test_site_parameter_tied_to_non_site_module_is_rejected(self):
+    def test_layer_parameter_tied_to_non_layer_module_is_rejected(self):
         class Scale(nn.Module):
             def __init__(self, weight):
                 super().__init__()
@@ -354,7 +354,7 @@ class RDUSTTests(unittest.TestCase):
                 row, = csv.DictReader(stream)
             self.assertEqual(result['method'], 'RDUST')
             self.assertTrue(row['true_cos_direction'])
-            with patch.object(RDUST, '_estimate_site', side_effect=RuntimeError('probe failed')):
+            with patch.object(RDUST, '_estimate_layer', side_effect=RuntimeError('probe failed')):
                 with self.assertRaisesRegex(RuntimeError, 'probe failed'):
                     run_rdust(trainer, loader, num_iterations=1, pop_size=32, chunk=8,
                                evo_eval_freq=0, grad_cos_freq=0)

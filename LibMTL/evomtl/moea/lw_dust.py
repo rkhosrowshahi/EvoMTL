@@ -3,11 +3,11 @@
 DUST (:mod:`.dust`) estimates the gradient of every layer on one mini-batch at one weight snapshot and updates all
 layers together. LW-DUST visits the parameter groups one at a time, in the order the forward pass calls them (first
 layer to last), and gives group ``l`` its own number ``T_l`` of inner steps before moving on to the next. A group is one
-site (a module with a weight matrix: its weight and bias) or one module owning parameters outside the sites (a
+layer (a module with a weight matrix: its weight and bias) or one module owning parameters outside the weight layers (a
 normalization affine). One inner step on group ``l``:
 
 1. fresh mini-batches (``num_batches``) and a clean forward at the current weights;
-2. the group's gradient estimate, as in DUST: for a site, its ``draws_l`` output jitters (``allocation``) and the exact
+2. the group's gradient estimate, as in DUST: for a layer, its ``draws_l`` output jitters (``allocation``) and the exact
    local linear map of the reward-weighted noise and the cached input; for any other group, the two-sided weight-space
    ES (``es_draws`` pairs) on its parameters alone;
 3. one optimizer step on the group's parameters; the rest of the network is unchanged.
@@ -21,7 +21,7 @@ generation over ``L`` mini-batches.
 The optimizer runs over all the model's parameters; an inner step sets the gradients of the active group only (the
 others ``None``), so the momentum and Adam statistics of a group advance only on its own steps. LW-DUST is
 single-objective: the rewards come from the summed task loss. Distinct modules sharing a parameter would split its
-gradient over two groups, so they are rejected; one module called several times (a shared decoder) is one site.
+gradient over two groups, so they are rejected; one module called several times (a shared decoder) is one layer.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from .es_common import (
 
 
 class LWDUST(DUST):
-    """DUST's per-site estimator, applied to one parameter group at a time with ``T_l`` inner steps per group."""
+    """DUST's per-layer estimator, applied to one parameter group at a time with ``T_l`` inner steps per group."""
 
     name = "LW-DUST"
     reverse = False  # RLW-DUST (:mod:`.rlw_dust`): visit the groups from the last to the first
@@ -79,7 +79,7 @@ class LWDUST(DUST):
                 owners[id(p)] = name
         super()._setup()
         free = {id(p) for p in self.free}
-        groups = {n: [p for p in m.parameters(recurse=False) if n in self.sites or id(p) in free]
+        groups = {n: [p for p in m.parameters(recurse=False) if n in self.layers or id(p) in free]
                   for n, m in self.model.named_modules()}
         groups = {n: ps for n, ps in groups.items() if ps}
         # modules never called by the forward (a scalar read directly by its parent) go last
@@ -109,11 +109,11 @@ class LWDUST(DUST):
             task_losses = self._capture(inputs, gts)  # [K, B] at the current weights
             losses += task_losses.mean(1).cpu() / len(batches)
             grads: Dict[nn.Parameter, torch.Tensor] = {}
-            if name in self.sites:
+            if name in self.layers:
                 n = self.chunk
                 x = inputs.repeat(n, *(1,) * (inputs.dim() - 1))
                 y = {t: g.repeat(n, *(1,) * (g.dim() - 1)) for t, g in gts.items()}
-                self._estimate_site(name, self.W @ task_losses, x, y, grads)
+                self._estimate_layer(name, self.W @ task_losses, x, y, grads)
             else:
                 self._weight_space(inputs, gts, grads, 1, params=active)
             for p in active:
@@ -167,7 +167,7 @@ def run_lw_dust(
     inner_steps : list of int, optional
         ``T_l``: one count for every group, or one per group in forward order (``0`` freezes a group). Default ``[1]``.
     pop_size, allocation, draw_scale, draws, sigma, chunk, es_draws, es_sigma
-        DUST's per-site jitter draws and weight-space ES (:func:`~.dust.run_dust`), used at every inner step.
+        DUST's per-layer jitter draws and weight-space ES (:func:`~.dust.run_dust`), used at every inner step.
     lr, optim, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps, sgd_momentum
         One optimizer on the model's parameters (:func:`~.es_common.make_es_optimizer`).
     method, _estimator
@@ -212,7 +212,7 @@ def run_lw_dust(
             diagnose = grad_cos_freq > 0 and iteration % int(grad_cos_freq) == 0
             batches = trainer._sample_batches(train_dataloaders, num_batches)
             if dust.draws is None:
-                dust._capture(*batches[0])  # finds the sites, the groups and the draws
+                dust._capture(*batches[0])  # finds the layers, the groups and the draws
             J = torch.zeros(start)
             J_true = torch.zeros(start)
             losses, taken, cosines = torch.zeros(len(tasks)), 0, {}

@@ -1,6 +1,6 @@
 """Curvature-aware DUST (CADUST): adaptive Gaussian probes in activation space.
 
-For each site, concatenate the flattened outputs of all its calls for one sample. Use the same covariance for
+For each layer, concatenate the flattened outputs of all its calls for one sample. Use the same covariance for
 every sample, with independent draws: ``Sigma = alpha I + U diag(lambda) U.T``. The initial covariance is I.
 After a batch, update a low-rank, exponentially discounted second moment of the per-sample activation gradients
 estimated by DUST. This is an empirical-Fisher-style curvature proxy, built without backprop or extra forwards.
@@ -10,7 +10,7 @@ those directions in proportion to their eigenvalues, keeping ``trace(Sigma) = D`
 jitter per activation. In the small-jitter limit, the raw reward-weighted error estimates ``Sigma @ gradient``.
 Apply ``Sigma^-1`` before the local weight update so adapting the probes does not also precondition that update.
 As in DUST, chunk centering scales the leading term by ``1 - 1/chunk`` for chunks larger than one (also removed
-from the samples used to update the proxy). The covariance stays fixed over all draws for the site in each batch.
+from the samples used to update the proxy). The covariance stays fixed over all draws for the layer in each batch.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ class _Curvature:
 
 
 class CADUST(DUST):
-    """DUST on the summed task loss with a separate learned covariance for each site."""
+    """DUST on the summed task loss with a separate learned covariance for each layer."""
 
     name = "CADUST"
 
@@ -96,8 +96,8 @@ class CADUST(DUST):
         self.curvature: Dict[str, Tuple[tuple, _Curvature]] = {}
         super().__init__(*args, **kwargs)
 
-    def _site_curvature(self, name: str, widths: tuple) -> _Curvature:
-        # A change in the number or shape of calls changes the coordinates of the site.
+    def _layer_curvature(self, name: str, widths: tuple) -> _Curvature:
+        # A change in the number or shape of calls changes the coordinates of the layer.
         layout = tuple(s[1:] for s in self.shapes[name])
         if name not in self.curvature or self.curvature[name][0] != layout:
             self.curvature[name] = (layout, _Curvature(sum(widths), self.rank, self.decay, self.subspace_fraction))
@@ -108,19 +108,19 @@ class CADUST(DUST):
             return super()._sample_noise(name, samples)
         shapes = self.shapes[name]
         widths = tuple(math.prod(s[1:]) for s in shapes)
-        state = self._site_curvature(name, widths)
+        state = self._layer_curvature(name, widths)
         if state.basis is None:
             return super()._sample_noise(name, samples)
         noise = state.sample(samples, self.gen).split(widths, dim=1)
         return [a.reshape(samples, *s[1:]) for a, s in zip(noise, shapes)]
 
-    def _finish_site(self, name: str, errors: list) -> list:
+    def _finish_layer(self, name: str, errors: list) -> list:
         if not self.rank or not self.subspace_fraction:
             return errors
         objectives, batch = errors[0].shape[:2]
         flat = [e.reshape(objectives, batch, -1) for e in errors]
         widths = tuple(e.shape[-1] for e in flat)
-        state = self._site_curvature(name, widths)
+        state = self._layer_curvature(name, widths)
         corrected = state.inverse(torch.cat(flat, dim=-1))
         samples = corrected.sum(dim=0)
         if self.chunk > 1 and not self.antithetic:

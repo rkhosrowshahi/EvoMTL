@@ -80,17 +80,17 @@ class DUSTTests(unittest.TestCase):
             trainer = make_trainer()
             x, y = batch()
             dust = DUST(trainer, 12, .05, 4, 'equal', 0, .03, torch.Generator().manual_seed(0))
-            dust.estimate(x, y)  # caches every site's inputs
+            dust.estimate(x, y)  # caches every layer's inputs
         J_true = true_jacobian(trainer, x, y)
         outputs = {}
         hooks = [m.register_forward_hook(lambda m, a, o, n=n: outputs.setdefault(n, []).append(o.retain_grad() or o))
-                 for n, m in dust.sites.items()]
+                 for n, m in dust.layers.items()]
         preds = trainer.model(x)
         for h in hooks + dust.hooks:
             h.remove()
         (nn.functional.cross_entropy(preds['a'], y['a'], reduction='sum')).backward()
         grads = {}
-        for n, m in dust.sites.items():
+        for n, m in dust.layers.items():
             errors = [(o.grad if o.grad is not None else torch.zeros_like(o)).unsqueeze(0) for o in outputs[n]]
             dust._reassemble(m, errors, dust.inputs[n], grads)
         J = torch.cat([grads[p].reshape(-1) for p in trainer.model.parameters()]) / len(x)
@@ -138,7 +138,7 @@ class DUSTTests(unittest.TestCase):
         torch.testing.assert_close(nn.utils.parameters_to_vector(trainer.model.parameters()), theta)
 
     def test_antithetic_pairs_negate_one_noise_draw(self):
-        """A-DUST: each forward pass of a site (the batch repeated chunk = 4 times) holds 2 pairs, +sigma a on the first
+        """A-DUST: each forward pass of a layer (the batch repeated chunk = 4 times) holds 2 pairs, +sigma a on the first
         two copies and -sigma a of the same draw on the last two, at every call of the shared head."""
         with contextlib.redirect_stdout(io.StringIO()):
             trainer = make_trainer()  # shared head: two calls per forward
@@ -146,7 +146,7 @@ class DUSTTests(unittest.TestCase):
             dust = DUST(trainer, 24, .05, 4, 'equal', 0, .03, torch.Generator().manual_seed(0), antithetic=True)
             seen = {}
             hooks = [m.register_forward_hook(lambda m, a, o, n=n: seen.setdefault(n, []).append(
-                dust.jitter[n][dust.calls[n]]) if n in dust.jitter else None) for n, m in dust.sites.items()]
+                dust.jitter[n][dust.calls[n]]) if n in dust.jitter else None) for n, m in dust.layers.items()]
             dust.estimate(x, y)
             for h in hooks:
                 h.remove()
@@ -212,7 +212,7 @@ class DUSTTests(unittest.TestCase):
         state.update(torch.stack([1.2 * weak, -1.2 * weak]))
         torch.testing.assert_close(state.basis @ state.basis.T, torch.outer(weak, weak))
 
-    def test_cadust_warmup_and_shared_site_match_dust_contract(self):
+    def test_cadust_warmup_and_shared_layer_match_dust_contract(self):
         with contextlib.redirect_stdout(io.StringIO()):
             trainer = make_trainer(shared=True)
             x, y = batch()
@@ -285,7 +285,7 @@ class DUSTTests(unittest.TestCase):
         self.assertLess(float((J_sum[0] - J.sum(0)).norm() / J.sum(0).norm()), 1e-4)  # float32 rounding only
         torch.testing.assert_close(L_sum, L)
 
-    def test_parameters_outside_the_sites_get_weight_space_es(self):
+    def test_parameters_outside_the_layers_get_weight_space_es(self):
         with contextlib.redirect_stdout(io.StringIO()):
             trainer = make_trainer(norm=True)
             x, y = batch()

@@ -168,7 +168,7 @@ def main():
                             exact=flat(torch.autograd.grad(objective(),list(self.model.parameters())))
                         self.set_theta(theta.detach())
                         delta=after-before; staged=[(direction.detach(),exact,delta)]
-                        for name,module in estimator.sites.items():
+                        for name,module in estimator.layers.items():
                             ps=list(module.parameters(recurse=False))
                             g=torch.cat([direction[offsets[p]] for p in ps]); t=torch.cat([exact[offsets[p]] for p in ps])
                             d=torch.cat([delta[offsets[p]] for p in ps])

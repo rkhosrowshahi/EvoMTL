@@ -87,7 +87,7 @@ class LWDUSTTests(unittest.TestCase):
 
     def test_groups_include_free_normalization_and_validate_counts(self):
         with contextlib.redirect_stdout(io.StringIO()):
-            trainer = make_trainer(norm=True)  # shared head: one site called once per task
+            trainer = make_trainer(norm=True)  # shared head: one layer called once per task
             dust = LWDUST(trainer, [1, 2, 0, 1], 24, .05, 4, 'equal', 4, .03, torch.Generator().manual_seed(4))
             optimizer = torch.optim.Adam(trainer.model.parameters(), lr=.001)
             try:

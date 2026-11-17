@@ -1,6 +1,6 @@
 """Multi-objective DUST with the MGDA common descent direction of the per-task gradient estimates (MO-MGDA-DUST).
 
-DUST (:mod:`.dust`) with every task loss rewarded separately: each site gets one output error and one weight-gradient
+DUST (:mod:`.dust`) with every task loss rewarded separately: each layer gets one output error and one weight-gradient
 estimate per task, the rows ``g_k`` of ``J`` (``[K, D]``). They are combined as LibMTL's MGDA weighting combines its
 backprop gradients (Sener & Koltun 2018, :class:`~LibMTL.weighting.MGDA.MGDA`):
 

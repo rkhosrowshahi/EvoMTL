@@ -1,43 +1,44 @@
 """DUST on the network weights: forward-only gradient estimates from per-sample activity perturbation.
 
-DUST (Q Labs, 2026) trains a network with forward evaluations only, no backward pass. Every layer with a weight
-matrix (Linear, convolution, embedding) is a *site*. One generation, on one mini-batch:
+DUST (Q Labs, 2026) trains a network with forward evaluations only, no backward pass. It estimates every
+*weight layer*, a layer with a weight matrix (Linear, convolution, embedding). One generation, on one mini-batch:
 
-1. A clean forward caches every site's input and the per-sample loss ``L[b] = sum_k L_k[b]``, the equal-weight sum
+1. A clean forward caches every layer's input and the per-sample loss ``L[b] = sum_k L_k[b]``, the equal-weight sum
    of the task losses (the scalarized loss of OpenES).
-2. Direct draws jitter one site's output, ``y + sigma a`` with ``a ~ N(0, I)`` drawn independently at every sample,
+2. Direct draws jitter one layer's output, ``y + sigma a`` with ``a ~ N(0, I)`` drawn independently at every sample,
    rerun the forward and reward each sample's jitter with that sample's loss reduction
    ``r[n, b] = L[b] - L(y + sigma a_n)[b]``, centered over the ``chunk`` draws of one forward pass (the batch
-   repeated ``chunk`` times). The reward-weighted noise estimates the error at the site's output:
+   repeated ``chunk`` times). The reward-weighted noise estimates the error at the layer's output:
    ``e[b] = -mean_n(r[n, b] a_n[b]) / sigma ~ dL[b] / dy[b]``.
-3. The site's weight gradient is the exact local linear map of ``e`` and the cached input, as in backprop:
+3. The layer's weight gradient is the exact local linear map of ``e`` and the cached input, as in backprop:
    ``sum_b e[b] x[b]^T`` for a Linear layer (bias: ``sum_b e[b]``), the correlation of ``e`` with ``x`` for a
    convolution, a scatter-add for an embedding. Divided by the batch size, it estimates the gradient of the mean loss.
-4. Parameters outside the sites (normalization affines, free scalars) get two-sided weight-space ES on the loss
+4. Parameters outside the weight layers (normalization affines, free scalars) get two-sided weight-space ES on the loss
    summed over the samples, as the paper does for its residual mixing scalars.
 5. One optimizer step on the weights ``theta`` along the estimate.
 
 DUST is single-objective, as in the paper. The multi-objective variants reward every task loss separately instead:
 one gradient estimate per task, the rows ``g_k`` of ``J`` (``[K, D]``), combined by an MTL aggregator into the
 direction (``aggregate`` of :func:`run_dust`): their sum (MO-Sum-DUST, :mod:`.mo_sum_dust`; equal to DUST up to
-rounding), UPGrad (MO-UPGrad-DUST, :mod:`.mo_upgrad_dust`) or MGDA (MO-MGDA-DUST, :mod:`.mo_mgda_dust`).
+rounding), UPGrad (MO-UPGrad-DUST, :mod:`.mo_upgrad_dust`) or MGDA (MO-MGDA-DUST, :mod:`.mo_mgda_dust`), or
+per weight layer from cross-chunk Gramians, whose noise has zero mean (MO-Split-DUST, :mod:`.mo_split_dust`).
 A-DUST (:mod:`.a_dust`, ``antithetic``) replaces the independent draws and the chunk centering of step 2 by
 antithetic pairs ``y +- sigma a`` rewarded by half their loss difference; the rest is unchanged.
 CADUST (:mod:`.cadust`) learns a low-rank covariance for the draws and corrects the error estimate for that covariance.
 
 Each draw is one forward pass of the batch, as one member of an OpenES population of ``pop_size``; the jitter is as
-large as the site's activations (for a convolution, far more numbers than its weights), so drawing it adds to the
-cost. The ``pop_size`` draws are split over the sites equally (``allocation="equal"``) or in proportion to their output
-size per sample (``"width"``), in multiples of ``chunk``. With ``"log"`` each site gets its own count from its output
+large as the layer's activations (for a convolution, far more numbers than its weights), so drawing it adds to the
+cost. The ``pop_size`` draws are split over the layers equally (``allocation="equal"``) or in proportion to their output
+size per sample (``"width"``), in multiples of ``chunk``. With ``"log"`` each layer gets its own count from its output
 size ``d`` per sample, the CMA-ES default population ``draw_scale * (4 + floor(3 ln d))`` rounded up to whole chunks,
-and ``pop_size`` is unused. With ``"custom"`` the counts are given per site (``draws``, multiples of ``chunk``), in the
-order the forward pass calls the sites.
+and ``pop_size`` is unused. With ``"custom"`` the counts are given per layer (``draws``, multiples of ``chunk``), in the
+order the forward pass calls the layers.
 
 Differences from the transformer recipe of the paper. There, a jitter is credited with the loss change at its own
 token, plus a decayed credit over later tokens for the attention internals; here the credit is per sample, which is
 exact because the samples of an eval-mode forward do not interact. The cached-logit head draws and the per-layer
 tuned draw counts are specific to that transformer and are not used. A module called several times per forward (a
-decoder shared by the tasks) is one site: its calls are jittered together and its gradient sums over them.
+decoder shared by the tasks) is one layer: its calls are jittered together and its gradient sums over them.
 
 References:
 - DUST: https://qlabs.sh/research/dust, https://github.com/qlabs-eng/dust
@@ -72,7 +73,7 @@ CONV_WEIGHT = {nn.Conv1d: torch.nn.grad.conv1d_weight, nn.Conv2d: torch.nn.grad.
 
 
 class DUST:
-    """Forward hooks capture each site's input during the clean pass and jitter its output during a draw.
+    """Forward hooks capture each layer's input during the clean pass and jitter its output during a draw.
 
     :meth:`step` estimates gradients and updates the weights. :meth:`estimate` returns the gradient estimate of the
     summed loss, or one estimate per task with ``per_task``.
@@ -95,7 +96,7 @@ class DUST:
         self.draw_scale = float(draw_scale)
         self.custom = [int(n) for n in draws] if draws else None
         if allocation == "custom" and (not self.custom or any(n < self.chunk or n % self.chunk for n in self.custom)):
-            raise ValueError(f"DUST custom allocation needs draws per site in multiples of chunk={self.chunk}, "
+            raise ValueError(f"DUST custom allocation needs draws per layer in multiples of chunk={self.chunk}, "
                              f"got {draws}.")
         self.es_draws, self.es_sigma = int(es_draws), float(es_sigma)
         # objectives = W @ task losses: their sum (DUST) or each task loss (MO-Sum-DUST)
@@ -110,14 +111,14 @@ class DUST:
                                  "reduction.")
             self.sample_loss[task] = copy.copy(fn)
             self.sample_loss[task].reduction = "none"
-        # candidate sites; those never called by the forward are dropped at the first clean pass
-        self.sites = {n: m for n, m in self.model.named_modules()
+        # candidate layers; those never called by the forward are dropped at the first clean pass
+        self.layers = {n: m for n, m in self.model.named_modules()
                       if isinstance(m, (nn.Linear, nn.Embedding))
                       or (type(m) in CONV_WEIGHT and m.padding_mode == "zeros" and not isinstance(m.padding, str))}
-        self.hooks = [m.register_forward_hook(self._hook(n)) for n, m in self.sites.items()]
-        self.inputs: Dict[str, list] = {}   # site -> input of every call (clean pass)
-        self.shapes: Dict[str, list] = {}   # site -> output shape of every call (clean pass)
-        self.jitter: Dict[str, list] = {}   # site -> jitter added to the output of every call (current draw)
+        self.hooks = [m.register_forward_hook(self._hook(n)) for n, m in self.layers.items()]
+        self.inputs: Dict[str, list] = {}   # layer -> input of every call (clean pass)
+        self.shapes: Dict[str, list] = {}   # layer -> output shape of every call (clean pass)
+        self.jitter: Dict[str, list] = {}   # layer -> jitter added to the output of every call (current draw)
         self.calls: Dict[str, int] = {}
         self.capturing = False
         self.draws: Optional[Dict[str, int]] = None
@@ -146,13 +147,13 @@ class DUST:
         return torch.stack([r.reshape(len(r), -1).mean(1) for r in rows])
 
     def _setup(self) -> None:
-        """After the first clean pass: keep the sites the forward calls, collect the parameters outside them and split
-        the draws over the sites."""
-        self.sites = {n: m for n, m in self.sites.items() if n in self.inputs}
-        covered = {id(p) for m in self.sites.values() for p in m.parameters(recurse=False)}
+        """After the first clean pass: keep the layers the forward calls, collect the parameters outside them and split
+        the draws over the layers."""
+        self.layers = {n: m for n, m in self.layers.items() if n in self.inputs}
+        covered = {id(p) for m in self.layers.values() for p in m.parameters(recurse=False)}
         self.free = [p for p in self.model.parameters() if id(p) not in covered]
-        widths = {n: sum(math.prod(s[1:]) for s in self.shapes[n]) for n in self.sites}  # output size per sample
-        self.draws = self._allocate(widths, list(self.inputs))  # sites in the order the forward pass calls them
+        widths = {n: sum(math.prod(s[1:]) for s in self.shapes[n]) for n in self.layers}  # output size per sample
+        self.draws = self._allocate(widths, list(self.inputs))  # layers in the order the forward pass calls them
         total = sum(self.draws.values())
         print(f"[EvoMTL] {self.name}: {total} direct draws per generation"
               + (f" ({total // 2} antithetic pairs)" if self.antithetic else "") + f" ({self.allocation}): "
@@ -161,21 +162,21 @@ class DUST:
                  if self.free else ""), flush=True)
 
     def _allocate(self, widths: Dict[str, int], order: list) -> Dict[str, int]:
-        """Draws per unit (a site, or a group of sites jittered together) from its output size per sample
+        """Draws per unit (a layer, or a group of layers jittered together) from its output size per sample
         ``widths``; ``order`` is the forward order of the units, for ``"custom"``."""
         if self.allocation == "custom":
             if len(self.custom) != len(widths):
-                raise ValueError(f"DUST custom allocation: {len(self.custom)} draw counts for {len(widths)} sites "
+                raise ValueError(f"DUST custom allocation: {len(self.custom)} draw counts for {len(widths)} layers "
                                  f"({', '.join(widths)}).")
             draws = {n: dict(zip(order, self.custom))[n] for n in widths}
-        elif self.allocation == "log":  # CMA-ES population rule per site, rounded up to whole chunks
+        elif self.allocation == "log":  # CMA-ES population rule per layer, rounded up to whole chunks
             draws = {n: self.chunk * math.ceil(self.draw_scale * (4 + math.floor(3 * math.log(d))) / self.chunk)
                      for n, d in widths.items()}
-        else:  # one chunk per site, the other chunks in proportion to the share (largest remainder: pop_size draws)
+        else:  # one chunk per layer, the other chunks in proportion to the share (largest remainder: pop_size draws)
             share = {n: (d if self.allocation == "width" else 1.0) for n, d in widths.items()}
             units = self.pop_size // self.chunk - len(share)
             if units < 0:
-                raise ValueError(f"DUST needs pop_size >= chunk * sites = {self.chunk * len(share)}, "
+                raise ValueError(f"DUST needs pop_size >= chunk * layers = {self.chunk * len(share)}, "
                                  f"got {self.pop_size}.")
             quota = {n: units * s / sum(share.values()) for n, s in share.items()}
             extra = {n: int(q) for n, q in quota.items()}
@@ -187,7 +188,7 @@ class DUST:
     def _sample_noise(self, name: str, samples: int) -> list:
         return [torch.randn(samples, *s[1:], generator=self.gen, device=self.gen.device) for s in self.shapes[name]]
 
-    def _finish_site(self, name: str, errors: list) -> list:
+    def _finish_layer(self, name: str, errors: list) -> list:
         return errors
 
     def _capture(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -202,15 +203,20 @@ class DUST:
             self._setup()
         return task_losses
 
-    def _estimate_site(self, name: str, clean: torch.Tensor, x: torch.Tensor,
+    def _estimate_layer(self, name: str, clean: torch.Tensor, x: torch.Tensor,
                        y: Dict[str, torch.Tensor], grads: Dict[nn.Parameter, torch.Tensor]) -> None:
-        """Estimate one site's gradient, using a clean baseline and chunk-repeated data at the same weights."""
+        """Estimate one layer's gradient, using a clean baseline and chunk-repeated data at the same weights."""
+        errors = [sum(parts) for parts in zip(*self._chunk_errors(name, clean, x, y))]
+        self._reassemble(self.layers[name], self._finish_layer(name, errors), self.inputs[name], grads)
+
+    def _chunk_errors(self, name: str, clean: torch.Tensor, x: torch.Tensor, y: Dict[str, torch.Tensor]):
+        """Yield the share of every chunk (one forward pass of draws) in the layer's output errors, one ``[K, B, ...]``
+        tensor per call of the layer; the shares sum to the estimate and are independent given the weights."""
         K, B = clean.shape
         n = self.chunk
         m = n // 2 if self.antithetic else n
         draws = self.draws[name]
         count = draws // 2 if self.antithetic else draws
-        errors = [torch.zeros(K, *s, device=clean.device) for s in self.shapes[name]]
         for _ in range(draws // n):
             noise = self._sample_noise(name, m * B)
             # Pair k of sample b: +a at k*B+b and -a at (m+k)*B+b.
@@ -225,9 +231,8 @@ class DUST:
                 reward = clean.unsqueeze(1) - loss
                 if n > 1:
                     reward = reward - reward.mean(1, keepdim=True)
-            for e, a in zip(errors, noise):
-                e -= torch.einsum("knb,nb...->kb...", reward, a.view(m, B, *a.shape[1:])) / (self.sigma * count)
-        self._reassemble(self.sites[name], self._finish_site(name, errors), self.inputs[name], grads)
+            yield [-torch.einsum("knb,nb...->kb...", reward, a.view(m, B, *a.shape[1:])) / (self.sigma * count)
+                   for a in noise]
 
     @torch.no_grad()
     def estimate(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -242,7 +247,7 @@ class DUST:
 
         grads: Dict[nn.Parameter, torch.Tensor] = {}
         for name in self.draws:
-            self._estimate_site(name, clean, x, y, grads)
+            self._estimate_layer(name, clean, x, y, grads)
         if self.free:
             self._weight_space(inputs, gts, grads, K)
         J = torch.cat([grads[p].reshape(K, -1) if p in grads else torch.zeros(K, p.numel(), device=clean.device)
@@ -287,7 +292,7 @@ class DUST:
 
     @staticmethod
     def _reassemble(m: nn.Module, errors: list, inputs: list, grads: Dict[nn.Parameter, torch.Tensor]) -> None:
-        """Exact local linear map of the site ``m``: its weight (and bias) gradients from the output errors ``e``
+        """Exact local linear map of the layer ``m``: its weight (and bias) gradients from the output errors ``e``
         (``[K, B, ...]``) and inputs of every call, added to ``grads``."""
         for e, x in zip(errors, inputs):
             K = e.shape[0]
@@ -312,8 +317,8 @@ class DUST:
 
     def _weight_space(self, inputs: torch.Tensor, gts: Dict[str, torch.Tensor],
                       grads: Dict[nn.Parameter, torch.Tensor], K: int, params: Optional[list] = None) -> None:
-        """Two-sided weight-space ES on the parameters outside the sites, rewarded by each objective summed over the
-        samples (divided by the batch size in :meth:`estimate`, like the site gradients)."""
+        """Two-sided weight-space ES on the parameters outside the weight layers, rewarded by each objective summed over the
+        samples (divided by the batch size in :meth:`estimate`, like the layer gradients)."""
         params = self.free if params is None else params
         clean = [p.detach().clone() for p in params]
         est = [torch.zeros(K, *p.shape, device=p.device) for p in params]
@@ -372,19 +377,19 @@ def run_dust(
     Parameters
     ----------
     pop_size : int
-        Direct draws (forward passes of the batch) per generation, split over the sites by ``allocation``
+        Direct draws (forward passes of the batch) per generation, split over the layers by ``allocation``
         (unused with ``"log"``).
     draw_scale : float
-        ``allocation="log"``: multiplier of the per-site CMA-ES population ``4 + floor(3 ln d)``.
+        ``allocation="log"``: multiplier of the per-layer CMA-ES population ``4 + floor(3 ln d)``.
     draws : list of int, optional
-        ``allocation="custom"``: draws per site, in the order the forward pass calls the sites.
+        ``allocation="custom"``: draws per layer, in the order the forward pass calls the layers.
     sigma : float
-        Std of the jitter on the site outputs (activation units, not weight units).
+        Std of the jitter on the layer outputs (activation units, not weight units).
     chunk : int
         Draws per forward pass (the batch repeated); the rewards are centered over them. With ``antithetic``: even,
         ``chunk / 2`` pairs per forward pass, no centering.
     es_draws, es_sigma
-        Antithetic pairs and std of the weight-space ES on the parameters outside the sites (unused without them).
+        Antithetic pairs and std of the weight-space ES on the parameters outside the weight layers (unused without them).
     lr, optim, adam_betas, adam_eps, rmsprop_alpha, rmsprop_eps, sgd_momentum
         Optimizer on ``theta`` (:func:`~.es_common.make_es_optimizer`); the paper uses SGD with momentum.
     grad_cos_freq : int
@@ -396,7 +401,7 @@ def run_dust(
         (``J``: ``[K, D]`` task gradients, ``losses``: ``[K]`` task losses on the batch, ``w``: ``[K]`` weights of
         the rows, logged). ``None``: DUST on the summed loss.
     antithetic : bool
-        A-DUST (:mod:`.a_dust`): the draws of a site are ``draws / 2`` antithetic pairs; every draw count (``pop_size``,
+        A-DUST (:mod:`.a_dust`): the draws of a layer are ``draws / 2`` antithetic pairs; every draw count (``pop_size``,
         ``draws``) still counts forward evaluations, so the cost per generation is that of DUST.
     method : str
         Logged name of the method.
